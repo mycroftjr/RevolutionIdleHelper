@@ -21,12 +21,17 @@ SetMouseDelay 0
 SetKeyDelay 0, 0
 CoordMode "Mouse", "Screen"
 
-; Disable DPI awareness to prevent font scaling issues on high DPI displays
-; This ensures consistent appearance across different DPI settings
+; Configure DPI handling for high DPI displays to prevent font scaling issues
 try {
-    DllCall("SetProcessDpiAwarenessContext", "ptr", -1)  ; DPI_AWARENESS_CONTEXT_UNAWARE
+    ; Try system DPI unaware (prevents Windows from scaling the application)
+    DllCall("SetProcessDpiAwarenessContext", "ptr", -2)  ; DPI_AWARENESS_CONTEXT_SYSTEM_UNAWARE
 } catch {
-    ; Fallback - no DPI awareness
+    try {
+        ; Fallback: completely disable DPI awareness
+        DllCall("User32.dll\SetProcessDPIAware")
+    } catch {
+        ; No DPI handling available - will use system default
+    }
 }
 
 ; ================================================================================
