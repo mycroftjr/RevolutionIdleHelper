@@ -1,4 +1,4 @@
-﻿; ================================================================================
+; ================================================================================
 ; REFINE TREE HELPER v1.0 - Revolution Idle Automation Script
 ; ================================================================================
 ; Description: Automates mineral spawning, polishing and refining in Revolution Idle
@@ -21,11 +21,12 @@ SetMouseDelay 0
 SetKeyDelay 0, 0
 CoordMode "Mouse", "Screen"
 
-; Enable DPI awareness for proper scaling
+; Disable DPI awareness to prevent font scaling issues on high DPI displays
+; This ensures consistent appearance across different DPI settings
 try {
-    DllCall("SetProcessDpiAwarenessContext", "ptr", -4)  ; PER_MONITOR_AWARE_V2
+    DllCall("SetProcessDpiAwarenessContext", "ptr", -1)  ; DPI_AWARENESS_CONTEXT_UNAWARE
 } catch {
-    try DllCall("SetProcessDPIAware")
+    ; Fallback - no DPI awareness
 }
 
 ; ================================================================================
@@ -75,14 +76,32 @@ class Config {
         "refinePrestigeConfirm", [1497, 967],
         "refineClose", [79, 383],
         
+        ; Game tabs
+        "timeFluxTab", [2100, 820],
+        "attacksTab", [2100, 640],
+        "shopTab", [2100, 1300],
+        "automationTab", [2100, 730],
+        "unityTab", [2100, 540],
+        
         ; Automation controls
-        "automation", [2186, 730],
         "automerge", [1852, 249],
-        "unite", [2137, 538],
         
         ; Time warp controls
         "timewarpStart", [785, 1055],
         "timewarpStop", [1200, 895],
+        
+        ; Shop actions
+        "buyTimeFlux", [1200, 1400],
+        "purchaseConfirm", [1500, 850],
+        
+        ; Unity actions
+        "unite", [1000, 1450],
+        "uniteConfirm1", [1200, 750],
+        "uniteConfirm2", [1500, 900],
+        "zodiacWater", [1200, 1100],
+        "zodiacWind", [1500, 750],
+        "zodiacEarth", [1200, 400],
+        "zodiacFire", [850, 750],
         
         ; Empty space for endgame exploit
         "emptySpace", [833, 1217]
@@ -135,6 +154,13 @@ class State {
     static autoMaxLevelUnlocked := false  ; Auto max level upgrade unlocked (default: false)
     static autoWeaponPolishUnlocked := false ; Auto weapon polish unlocked (default: false)
     
+    ; Unity Parameters (zodiac element selection)
+    static zodiacEarth := false           ; Earth zodiac element selected (default: false)
+    static zodiacFire := false            ; Fire zodiac element selected (default: false)
+    static zodiacWind := false            ; Wind zodiac element selected (default: false)
+    static zodiacWater := false           ; Water zodiac element selected (default: false)
+    static currentZodiacIndex := 0        ; Current zodiac index for cycling
+    
     ; UI section visibility states
     static sectionStates := Map(
         "macro", true,
@@ -142,6 +168,7 @@ class State {
         "finesettings", true,
         "unlockables", true,
         "variables", true,
+        "unityparameters", true,
         "statistics", true,
         "info", true
     )
@@ -189,6 +216,8 @@ class UI {
     static btnMacroEndgame := 0
     static btnMacroTimeWarp := 0
     static btnMacroAutoClicker := 0
+    static btnMacroTimeFluxBuy := 0
+    static btnMacroAutoUnity := 0
     
     ; Game state selection buttons
     static btnStateEarly := 0
@@ -220,6 +249,12 @@ class UI {
     static inputTimewarp := 0
     static lblExploitWait := 0
     static inputExploitWait := 0
+    
+    ; Unity Parameters buttons
+    static btnZodiacEarth := 0
+    static btnZodiacFire := 0
+    static btnZodiacWind := 0
+    static btnZodiacWater := 0
     
     ; Statistics display controls
     static imgPreview := 0
@@ -324,8 +359,14 @@ class ConfigManager {
         State.autoMaxLevelUnlocked := (IniRead(ini, "Unlockables", "AutoMaxLevelUnlocked", 0) + 0) ? true : false
         State.autoWeaponPolishUnlocked := (IniRead(ini, "Unlockables", "AutoWeaponPolishUnlocked", 0) + 0) ? true : false
         
+        ; Load Unity Parameters (all default to false)
+        State.zodiacEarth := (IniRead(ini, "UnityParameters", "ZodiacEarth", 0) + 0) ? true : false
+        State.zodiacFire := (IniRead(ini, "UnityParameters", "ZodiacFire", 0) + 0) ? true : false
+        State.zodiacWind := (IniRead(ini, "UnityParameters", "ZodiacWind", 0) + 0) ? true : false
+        State.zodiacWater := (IniRead(ini, "UnityParameters", "ZodiacWater", 0) + 0) ? true : false
+        
         ; Load section visibility states
-        for section in ["macro", "gamestate", "finesettings", "unlockables", "variables", "statistics", "info"] {
+        for section in ["macro", "gamestate", "finesettings", "unlockables", "variables", "unityparameters", "statistics", "info"] {
             State.sectionStates[section] := (IniRead(ini, "Sections", section, 1) + 0) ? true : false
         }
         
@@ -373,6 +414,12 @@ class ConfigManager {
         IniWrite (State.automergeUnlocked ? 1 : 0), ini, "Unlockables", "AutomergeUnlocked"
         IniWrite (State.autoMaxLevelUnlocked ? 1 : 0), ini, "Unlockables", "AutoMaxLevelUnlocked"
         IniWrite (State.autoWeaponPolishUnlocked ? 1 : 0), ini, "Unlockables", "AutoWeaponPolishUnlocked"
+        
+        ; Save Unity Parameters
+        IniWrite (State.zodiacEarth ? 1 : 0), ini, "UnityParameters", "ZodiacEarth"
+        IniWrite (State.zodiacFire ? 1 : 0), ini, "UnityParameters", "ZodiacFire"
+        IniWrite (State.zodiacWind ? 1 : 0), ini, "UnityParameters", "ZodiacWind"
+        IniWrite (State.zodiacWater ? 1 : 0), ini, "UnityParameters", "ZodiacWater"
         
         ; Save section states
         for section, isOpen in State.sectionStates {
@@ -502,13 +549,13 @@ class Action {
             return
         
         ; Open automation menu and toggle merge
-        Action.Click("automation")
+        Action.Click("automationTab")
         Util.Sleep(State.microDelayMs)
         Action.Click("automerge")
         Util.Sleep(State.microDelayMs)
         Action.Click("automerge")
         Util.Sleep(State.microDelayMs)
-        Action.Click("unite")
+        Action.Click("unityTab")
         Util.Sleep(State.microDelayMs)
     }
     
@@ -885,6 +932,94 @@ class Macro {
             Util.Sleep(State.microDelayMs)
         }
     }
+    
+    ; Time Flux Buy macro - loops between buyTimeFlux and purchaseConfirm
+    static TimeFluxBuy() {
+        if State.isRunning {
+            Util.Sleep(State.microDelayMs)
+            
+            ; Go to Shop tab
+            Action.Click("shopTab")
+            Util.Sleep(State.microDelayMs)
+            
+            ; Buy Time Flux
+            Action.Click("buyTimeFlux")
+            Util.Sleep(State.microDelayMs)
+            
+            ; Confirm purchase
+            Action.Click("purchaseConfirm")
+            Util.Sleep(State.microDelayMs)
+        }
+    }
+    
+    ; Auto Unity macro - complex sequence with zodiac cycling
+    static AutoUnity() {
+        if State.isRunning {
+            Util.Sleep(State.microDelayMs)
+            
+            ; Go to Time Flux Tab
+            Action.Click("timeFluxTab")
+            Util.Sleep(250)  ; Wait for Time Flux tab to load
+            
+            ; Click Time Warp Start
+            Action.Click("timewarpStart")
+            Util.Sleep(State.timewarpInterval)
+            
+            ; Click Time Warp Stop
+            Action.Click("timewarpStop")
+            Util.Sleep(250)  ; Wait after stopping time warp
+            
+            ; Go to Attacks tab
+            Action.Click("attacksTab")
+            Util.Sleep(State.microDelayMs)
+            
+            ; Click Unite
+            Action.Click("unite")
+            Util.Sleep(800)  ; Wait for Unite dialog to appear
+            
+            ; Click selected zodiac (cycle through selected ones)
+            zodiacType := Macro.GetNextZodiac()
+            if (zodiacType != "") {
+                Action.Click(zodiacType)
+                Util.Sleep(State.microDelayMs)
+                
+                ; Click Unite Confirmation 1
+                Action.Click("uniteConfirm1")
+                Util.Sleep(State.microDelayMs)
+                
+                ; Click Unite Confirmation 2
+                Action.Click("uniteConfirm2")
+                Util.Sleep(State.microDelayMs)
+            }
+            
+            ; Wait in Attacks tab before next macro cycle
+            Util.Sleep(7000)
+        }
+    }
+    
+    ; Helper function to get next zodiac in cycle
+    static GetNextZodiac() {
+        ; Build array of selected zodiacs in order: Fire -> Earth -> Wind -> Water
+        selectedZodiacs := []
+        if State.zodiacFire
+            selectedZodiacs.Push("zodiacFire")
+        if State.zodiacEarth
+            selectedZodiacs.Push("zodiacEarth")
+        if State.zodiacWind
+            selectedZodiacs.Push("zodiacWind")
+        if State.zodiacWater
+            selectedZodiacs.Push("zodiacWater")
+        
+        if selectedZodiacs.Length = 0
+            return ""
+        
+        ; Get current zodiac and advance to next
+        State.currentZodiacIndex++
+        if State.currentZodiacIndex > selectedZodiacs.Length
+            State.currentZodiacIndex := 1
+            
+        return selectedZodiacs[State.currentZodiacIndex]
+    }
 }
 
 ; ================================================================================
@@ -1100,11 +1235,12 @@ class UIManager {
         UI.sectionContents["finesettings"] := []
         UI.sectionContents["unlockables"] := []
         UI.sectionContents["variables"] := []
+        UI.sectionContents["unityparameters"] := []
         UI.sectionContents["statistics"] := []
         UI.sectionContents["info"] := []
         
         ; Window width configuration
-        UI.hudW := 500  ; Increased from 440 to accommodate longer labels
+        UI.hudW := 540  ; Optimal width for all sections
         
         y := 0
         
@@ -1194,6 +1330,22 @@ class UIManager {
             
             btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Endgame Exploit", false)
             UI.btnMacroEndgame := btn
+            UI.sectionContents["macro"].Push(btn)
+            
+            y += btnH + gap
+            
+            ; Row 4: Time Flux Buy, Auto Unity
+            btnW := 170  ; Wider for longer text
+            totalW := (btnW * 2) + gap
+            x := (UI.hudW - totalW) // 2
+            
+            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Time Flux Buy", false)
+            UI.btnMacroTimeFluxBuy := btn
+            UI.sectionContents["macro"].Push(btn)
+            
+            x += btnW + gap
+            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Auto Unity", false)
+            UI.btnMacroAutoUnity := btn
             UI.sectionContents["macro"].Push(btn)
             
             y += btnH + pad
@@ -1407,6 +1559,49 @@ class UIManager {
             UI.sectionContents["variables"].Push(edt)
             
             y += 38 + pad
+        }
+        
+        ; UNITY PARAMETERS SECTION
+        UIManager.CreateSectionHeader("unityparameters", y, UI.hudW, "Unity Parameters")
+        y += 32
+        
+        if State.sectionStates["unityparameters"] {
+            ; Section label - centered
+            lbl := UI.gui.AddText(Format("x{} y{} w{} h25 Center", pad, y, UI.hudW - 2*pad), "Select Zodiac Element:")
+            lbl.SetFont("s11 cFFFFFF", "Cascadia Mono")
+            UI.sectionContents["unityparameters"].Push(lbl)
+            
+            y += 30
+            
+            ; Zodiac buttons in a 2x2 grid
+            btnW := 180  ; Button width for zodiac elements
+            btnH := 34   ; Standard button height
+            gap := 15
+            startX := (UI.hudW - (2 * btnW + gap)) // 2
+            
+            ; Earth Zodiac
+            btn := UIManager.CreateStyledButton(startX, y, btnW, btnH, "Earth Zodiac", State.zodiacEarth)
+            UI.btnZodiacEarth := btn
+            UI.sectionContents["unityparameters"].Push(btn)
+            
+            ; Fire Zodiac  
+            btn := UIManager.CreateStyledButton(startX + btnW + gap, y, btnW, btnH, "Fire Zodiac", State.zodiacFire)
+            UI.btnZodiacFire := btn
+            UI.sectionContents["unityparameters"].Push(btn)
+            
+            y += btnH + 15
+            
+            ; Wind Zodiac
+            btn := UIManager.CreateStyledButton(startX, y, btnW, btnH, "Wind Zodiac", State.zodiacWind)
+            UI.btnZodiacWind := btn
+            UI.sectionContents["unityparameters"].Push(btn)
+            
+            ; Water Zodiac
+            btn := UIManager.CreateStyledButton(startX + btnW + gap, y, btnW, btnH, "Water Zodiac", State.zodiacWater)
+            UI.btnZodiacWater := btn
+            UI.sectionContents["unityparameters"].Push(btn)
+            
+            y += btnH + pad
         }
         
         ; STATISTICS SECTION
@@ -1634,6 +1829,12 @@ class UIManager {
         if UI.btnMacroAutoClicker && IsObject(UI.btnMacroAutoClicker) {
             try UI.btnMacroAutoClicker.OnEvent("Click", (*) => Controller.SelectMacro("autoclicker"))
         }
+        if UI.btnMacroTimeFluxBuy && IsObject(UI.btnMacroTimeFluxBuy) {
+            try UI.btnMacroTimeFluxBuy.OnEvent("Click", (*) => Controller.SelectMacro("timefluxbuy"))
+        }
+        if UI.btnMacroAutoUnity && IsObject(UI.btnMacroAutoUnity) {
+            try UI.btnMacroAutoUnity.OnEvent("Click", (*) => Controller.SelectMacro("autounity"))
+        }
         
         ; Game state buttons
         if UI.btnStateEarly && IsObject(UI.btnStateEarly) {
@@ -1672,6 +1873,20 @@ class UIManager {
         }
         if UI.btnToggleAutoWeaponPolish && IsObject(UI.btnToggleAutoWeaponPolish) {
             try UI.btnToggleAutoWeaponPolish.OnEvent("Click", (*) => Controller.ToggleAutoWeaponPolish())
+        }
+        
+        ; Unity Parameters buttons
+        if UI.btnZodiacEarth && IsObject(UI.btnZodiacEarth) {
+            try UI.btnZodiacEarth.OnEvent("Click", (*) => Controller.ToggleZodiacEarth())
+        }
+        if UI.btnZodiacFire && IsObject(UI.btnZodiacFire) {
+            try UI.btnZodiacFire.OnEvent("Click", (*) => Controller.ToggleZodiacFire())
+        }
+        if UI.btnZodiacWind && IsObject(UI.btnZodiacWind) {
+            try UI.btnZodiacWind.OnEvent("Click", (*) => Controller.ToggleZodiacWind())
+        }
+        if UI.btnZodiacWater && IsObject(UI.btnZodiacWater) {
+            try UI.btnZodiacWater.OnEvent("Click", (*) => Controller.ToggleZodiacWater())
         }
         
         ; Input field change handlers
@@ -1871,6 +2086,10 @@ class UIManager {
             UIManager.UpdateButtonStyle(UI.btnMacroTimeWarp, State.currentMacro = "timewarp")
         if UI.btnMacroAutoClicker && IsObject(UI.btnMacroAutoClicker)
             UIManager.UpdateButtonStyle(UI.btnMacroAutoClicker, State.currentMacro = "autoclicker")
+        if UI.btnMacroTimeFluxBuy && IsObject(UI.btnMacroTimeFluxBuy)
+            UIManager.UpdateButtonStyle(UI.btnMacroTimeFluxBuy, State.currentMacro = "timefluxbuy")
+        if UI.btnMacroAutoUnity && IsObject(UI.btnMacroAutoUnity)
+            UIManager.UpdateButtonStyle(UI.btnMacroAutoUnity, State.currentMacro = "autounity")
         
         ; Update game state buttons and inputs
         if UI.btnStateEarly && IsObject(UI.btnStateEarly)
@@ -1921,6 +2140,16 @@ class UIManager {
             UIManager.UpdateButtonStyle(UI.btnToggleAutoMaxLevel, State.autoMaxLevelUnlocked)
         if UI.btnToggleAutoWeaponPolish && IsObject(UI.btnToggleAutoWeaponPolish)
             UIManager.UpdateButtonStyle(UI.btnToggleAutoWeaponPolish, State.autoWeaponPolishUnlocked)
+            
+        ; Update Unity Parameters buttons
+        if UI.btnZodiacEarth && IsObject(UI.btnZodiacEarth)
+            UIManager.UpdateButtonStyle(UI.btnZodiacEarth, State.zodiacEarth)
+        if UI.btnZodiacFire && IsObject(UI.btnZodiacFire)
+            UIManager.UpdateButtonStyle(UI.btnZodiacFire, State.zodiacFire)
+        if UI.btnZodiacWind && IsObject(UI.btnZodiacWind)
+            UIManager.UpdateButtonStyle(UI.btnZodiacWind, State.zodiacWind)
+        if UI.btnZodiacWater && IsObject(UI.btnZodiacWater)
+            UIManager.UpdateButtonStyle(UI.btnZodiacWater, State.zodiacWater)
     }
     
     ; Handle window dragging
@@ -2121,6 +2350,10 @@ class Controller {
                         Macro.TimeWarp()
                     case "autoclicker":
                         Macro.AutoClicker()
+                    case "timefluxbuy":
+                        Macro.TimeFluxBuy()
+                    case "autounity":
+                        Macro.AutoUnity()
                     default:
                         Macro.Standard()
                 }
@@ -2149,7 +2382,7 @@ class Controller {
     
     ; Cycle through macro types
     static CycleMacro() {
-        macros := ["standard", "quick", "long", "timewarp", "autoclicker", "endgame"]
+        macros := ["standard", "quick", "long", "timewarp", "autoclicker", "endgame", "timefluxbuy", "autounity"]
         currentIndex := 1
         for i, m in macros {
             if m = State.currentMacro {
@@ -2268,10 +2501,12 @@ class Controller {
     static UpdateMicroDelay() {
         if UI.inputMicroDelay && IsObject(UI.inputMicroDelay) {
             newVal := UI.inputMicroDelay.Text
-            numVal := newVal + 0
-            if numVal > 0 && numVal != State.microDelayMs {
-                State.microDelayMs := numVal
-                ConfigManager.Save()
+            if RegExMatch(newVal, "^\d+$") {
+                numVal := newVal + 0
+                if numVal > 0 && numVal != State.microDelayMs {
+                    State.microDelayMs := numVal
+                    ConfigManager.Save()
+                }
             }
         }
     }
@@ -2480,6 +2715,43 @@ class Controller {
         if UI.btnToggleAutoWeaponPolish && IsObject(UI.btnToggleAutoWeaponPolish) {
             UI.btnToggleAutoWeaponPolish.Text := State.autoWeaponPolishUnlocked ? "Auto Wpn Polish UNLOCKED" : "Auto Wpn Polish LOCKED"
             UIManager.UpdateButtonStyle(UI.btnToggleAutoWeaponPolish, State.autoWeaponPolishUnlocked)
+        }
+        ConfigManager.Save()
+        Util.FocusGame()
+    }
+    
+    ; Unity Parameters toggle functions
+    static ToggleZodiacEarth() {
+        State.zodiacEarth := !State.zodiacEarth
+        if UI.btnZodiacEarth && IsObject(UI.btnZodiacEarth) {
+            UIManager.UpdateButtonStyle(UI.btnZodiacEarth, State.zodiacEarth)
+        }
+        ConfigManager.Save()
+        Util.FocusGame()
+    }
+    
+    static ToggleZodiacFire() {
+        State.zodiacFire := !State.zodiacFire
+        if UI.btnZodiacFire && IsObject(UI.btnZodiacFire) {
+            UIManager.UpdateButtonStyle(UI.btnZodiacFire, State.zodiacFire)
+        }
+        ConfigManager.Save()
+        Util.FocusGame()
+    }
+    
+    static ToggleZodiacWind() {
+        State.zodiacWind := !State.zodiacWind
+        if UI.btnZodiacWind && IsObject(UI.btnZodiacWind) {
+            UIManager.UpdateButtonStyle(UI.btnZodiacWind, State.zodiacWind)
+        }
+        ConfigManager.Save()
+        Util.FocusGame()
+    }
+    
+    static ToggleZodiacWater() {
+        State.zodiacWater := !State.zodiacWater
+        if UI.btnZodiacWater && IsObject(UI.btnZodiacWater) {
+            UIManager.UpdateButtonStyle(UI.btnZodiacWater, State.zodiacWater)
         }
         ConfigManager.Save()
         Util.FocusGame()
