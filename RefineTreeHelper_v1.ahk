@@ -1,5 +1,5 @@
 ; ================================================================================
-; REFINE TREE HELPER v1.0 - Revolution Idle Automation Script
+; REFINE TREE HELPER v1.1 - Revolution Idle Automation Script
 ; ================================================================================
 ; Description: Automates mineral spawning, polishing and refining in Revolution Idle
 ; Author: GullibleMonkey
@@ -108,7 +108,7 @@ class Config {
     )
     
     ; Order in which to level up weapons
-    static weaponOrder := ["sword", "axe", "spear", "bow", "knuckle"]
+    static weaponOrder := ["sword", "knuckle", "axe", "spear", "bow"]
 }
 
 ; ================================================================================
@@ -265,7 +265,7 @@ class UI {
     static lblInfo := 0
     
     ; Layout constants
-    static hudW := 540     ; HUD window width (increased for full labels)
+    static hudW := 540     ; HUD window width
     static pad := 16       ; Padding around elements
     static gap := 10       ; Gap between buttons
     static btnH := 34      ; Standard button height
@@ -993,7 +993,7 @@ class Macro {
             }
             
             ; Wait in Attacks tab before next macro cycle
-            Util.Sleep(7000)
+            Util.Sleep(1000)
         }
     }
     
@@ -1248,11 +1248,11 @@ class UIManager {
         UI.header := UI.gui.AddText(Format("x0 y0 w{} h{} +BackgroundFFFFFF", UI.hudW, hdrH), "")
         
         ; Title (center) - BLACK text on white background
-        titleW := UI.hudW - 110  ; Adjusted for wider HUD
+        titleW := UI.hudW - 110  ; Title text width
         titleX := 55
         titleY := (hdrH - 26) // 2
         UI.titleText := UI.gui.AddText(Format("x{} y{} w{} h26 Center +BackgroundFFFFFF", 
-                                       titleX, titleY, titleW), "Refine Tree Helper v1.0")
+                                       titleX, titleY, titleW), "Refine Tree Helper v1.1")
         UI.titleText.SetFont("Bold s11 c000000", "Cascadia Mono")
         
         ; Eye icon (left) - BLACK on white background
@@ -1275,7 +1275,7 @@ class UIManager {
         
         ; Start/Stop button
         y := hdrH + pad
-        btnStartW := 220  ; Increased for wider HUD
+        btnStartW := 220  ; Start/stop button width
         btnX := (UI.hudW - btnStartW) // 2
         btn := UIManager.CreateStyledButton(btnX, y, btnStartW, btnH, "F5: Start macro", false)
         UI.btnStartStop := btn
@@ -1288,7 +1288,7 @@ class UIManager {
         
         if State.sectionStates["macro"] {
             ; Row 1: Standard, Quick, Long
-            btnW := 120  ; Increased width for wider HUD
+            btnW := 120  ; Macro selection button width
             totalW := (btnW * 3) + (gap * 2)
             x := (UI.hudW - totalW) // 2
             
@@ -1309,7 +1309,7 @@ class UIManager {
             y += btnH + gap
             
             ; Row 2: Time Warp Burst, Autoclicker
-            btnW := 200  ; Increased width for Time Warp Burst
+            btnW := 200  ; Time warp and autoclicker button width
             totalW := (btnW * 2) + gap
             x := (UI.hudW - totalW) // 2
             
@@ -1325,7 +1325,7 @@ class UIManager {
             y += btnH + gap
             
             ; Row 3: Endgame Exploit
-            btnW := 210  ; Increased for wider HUD
+            btnW := 210  ; Endgame exploit button width
             x := (UI.hudW - btnW) // 2
             
             btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Endgame Exploit", false)
@@ -1357,7 +1357,7 @@ class UIManager {
         
         if State.sectionStates["gamestate"] {
             ; Row 1: Early, Mid, Late, Custom
-            btnW := 95  ; Increased width for wider HUD
+            btnW := 95  ; Game state button width
             totalW := (btnW * 4) + (gap * 3)
             x := (UI.hudW - totalW) // 2
             
@@ -1383,7 +1383,7 @@ class UIManager {
             y += btnH + gap
             
             ; Custom spawn input (centered with more space for label)
-            lblW := 170  ; Increased for full label
+            lblW := 170  ; Custom input label width
             edtW := 50   ; Width for 2-3 characters
             totalW := lblW + edtW + 15
             x := (UI.hudW - totalW) // 2
@@ -1417,7 +1417,7 @@ class UIManager {
         
         if State.sectionStates["finesettings"] {
             ; All Fine Settings buttons
-            btnW := 200  ; Increased for wider HUD
+            btnW := 200  ; Fine settings button width
             totalW := (btnW * 2) + gap
             x := (UI.hudW - totalW) // 2
             
@@ -1436,7 +1436,7 @@ class UIManager {
             y += btnH + gap
             
             ; Row 2: Weapon Polish Mode
-            btnW := 300  ; Adjusted for wider HUD
+            btnW := 300  ; Time flux and unity button width
             x := (UI.hudW - btnW) // 2
             
             btn := UIManager.CreateStyledButton(x, y, btnW, btnH, 
@@ -1453,7 +1453,7 @@ class UIManager {
         
         if State.sectionStates["unlockables"] {
             ; Each button on its own line for full width
-            btnW := 320  ; Increased for wider HUD
+            btnW := 320  ; Unlockables button width
             x := (UI.hudW - btnW) // 2
             
             ; Row 1: Autospawn
@@ -1495,7 +1495,7 @@ class UIManager {
         
         if State.sectionStates["variables"] {
             ; Centered variable inputs with full labels
-            lblW := 340  ; Reduced by 40px for tighter spacing
+            lblW := 340  ; Variables label width
             edtW := 80   ; Width for 5 characters
             totalW := lblW + edtW + 15
             x := (UI.hudW - totalW) // 2
@@ -1949,7 +1949,7 @@ class UIManager {
         UI.sectionHeaders.Clear()
         UI.buttonStates.Clear()
         
-        ; Recreate GUI with updated layout
+        ; Recreate GUI with current layout
         UIManager.CreateGUI()
         UIManager.SetupEventHandlers()
         UIManager.UpdateVisuals()
@@ -2293,10 +2293,10 @@ class Controller {
         SetTimer(() => Controller.WaitStop(), -10)
     }
     
-    ; Wait for macro to fully stop (reduced wait time)
+    ; Wait for macro to fully stop
     static WaitStop() {
         t0 := A_TickCount
-        while State.isLocked && (A_TickCount - t0 < 300)  ; Reduced from 5000 to 300ms
+        while State.isLocked && (A_TickCount - t0 < 300)  ; 300ms timeout for stop completion
             Sleep 10
         State.isLocked := false
         State.isStopping := false
