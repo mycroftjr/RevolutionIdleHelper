@@ -2401,10 +2401,6 @@ class UIManager {
             if State.sectionStates["other.info"] {
                 ; Hotkey information text (indented)
                 infoText := "F5: Start/Stop`n"
-                          . "F6: Cycle Macros`n"
-                          . "F7: Cycle Game States`n"
-                          . "F8: Toggle All Fine Settings`n"
-                          . "F9: Toggle All Unlockables`n"
                           . "F10: Compact Mode`n"
                           . "Esc: Exit"
                 
