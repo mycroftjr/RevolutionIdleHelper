@@ -1,10 +1,10 @@
 ; ================================================================================
-; REFINE TREE HELPER v1.1 - Revolution Idle Automation Script
+; REVOLUTION IDLE HELPER v1.2 - Revolution Idle Automation Script
 ; ================================================================================
-; Description: Automates mineral spawning, polishing and refining in Revolution Idle
+; Description: Automation suite for Revolution Idle including minerals, unity, and utilities
 ; Author: GullibleMonkey
-; Optimized for AutoHotkey v2.0
-; Usage: F5 to start/stop, F6/F7 to cycle, F8/F9 to toggle, F10 to compact, Esc to exit
+; Compatible with AutoHotkey v2.0
+; Usage: F5 to start/stop, F10 to compact, Esc to exit
 ; ================================================================================
 
 #Requires AutoHotkey v2.0
@@ -35,6 +35,60 @@ try {
 }
 
 ; ================================================================================
+; CONSTANTS
+; ================================================================================
+
+class Constants {
+    ; Timing constants
+    static REDISTRIBUTION_WAIT := 400
+    static UNITE_DIALOG_WAIT := 800
+    static TAB_TRANSITION_WAIT := 250
+    static SCREENSHOT_CLEANUP_HOURS := 2
+    static SCREENSHOT_MAX_FILES := 10
+    static UI_UPDATE_INTERVAL := 250
+    static STATE_LOCK_WAIT := 1
+    
+    ; UI Layout Constants - Standardized spacing system
+    static MAX_MACRO_COUNT := 9
+    static RUNNING_WINDOW_TRANSPARENCY := 180
+    
+    ; Base spacing units
+    static UI_PAD := 16              ; Section padding
+    static UI_GAP := 10              ; Standard element gap
+    static UI_ROW_GAP := 12          ; Between button rows within sections  
+    static UI_SECTION_GAP := 12      ; Between sections
+    static UI_INPUT_GAP := 15        ; Label-to-input spacing
+    static UI_HEADER_SPACING := 32   ; After section headers
+    
+    ; Element dimensions
+    static UI_BUTTON_HEIGHT := 34    ; Standard button height
+    static UI_INPUT_HEIGHT := 30     ; Input field height
+    static UI_LABEL_OFFSET := 4      ; Label vertical offset for alignment
+    
+    ; Standardized button widths - configured for text fit
+    static UI_BTN_TINY := 110        ; Very short text (Standard, Quick, Long) - more padding
+    static UI_BTN_SMALL := 95        ; Game state buttons
+    static UI_BTN_MEDIUM := 140      ; Medium text buttons
+    static UI_BTN_LARGE := 180       ; Longer text buttons  
+    static UI_BTN_XLARGE := 220      ; Extra long text buttons
+    static UI_BTN_FULL := 280        ; Full-width single buttons
+    static UI_BTN_UNLOCKS := 320     ; Unlockables section only
+    
+    
+    ; File system constants
+    static MAX_LOG_SIZE := 1048576  ; 1MB
+    static CONFIG_BACKUP_COUNT := 3
+    
+    ; Validation ranges
+    static MIN_COORDINATE := 0
+    static MAX_COORDINATE := 3840  ; 4K display width
+    static MIN_DELAY := 10
+    static MAX_DELAY := 10000
+    static MIN_THRESHOLD := 0
+    static MAX_THRESHOLD := 255
+}
+
+; ================================================================================
 ; CONFIGURATION
 ; ================================================================================
 
@@ -43,7 +97,7 @@ class Config {
     static TARGET_PROCESS := "Revolution Idle.exe"
     
     ; Configuration file path for saving user preferences
-    static CONFIG_FILE := A_ScriptDir "\RefineTreeHelper_v1.ini"
+    static CONFIG_FILE := A_ScriptDir "\RevolutionIdleHelper_v1.2.ini"
     
     ; UI color scheme
     static COLOR_WHITE := 0xFFFFFF
@@ -53,7 +107,135 @@ class Config {
     ; How often to update the UI display (in milliseconds)
     static UI_UPDATE_INTERVAL := 250
     
-    ; Game click coordinates - these map to specific buttons in the game
+    ; Order in which to level up weapons
+    static weaponOrder := ["sword", "knuckle", "axe", "spear", "bow"]
+}
+
+; ================================================================================
+; GLOBAL STATE MANAGEMENT
+; ================================================================================
+
+class State {
+    ; Macro execution state flags
+    static isRunning := false        ; Is the macro currently running?
+    static isStarting := false       ; Is the macro in the process of starting?
+    static isStopping := false       ; Is the macro in the process of stopping?
+    static isLocked := false         ; Is the macro locked (prevents multiple starts)?
+    static queuedStart := false      ; Is there a queued start request?
+    static stateLock := false        ; Internal lock for atomic state operations
+    
+    ; Atomic state transition to prevent race conditions
+    static SetSafeState(newRunning, newStarting := false, newStopping := false) {
+        ; Wait for any ongoing state change to complete
+        while State.stateLock
+            Sleep 1
+        
+        ; Lock state changes
+        State.stateLock := true
+        
+        try {
+            State.isRunning := newRunning
+            State.isStarting := newStarting
+            State.isStopping := newStopping
+            State.isLocked := newRunning || newStarting || newStopping  ; Set locked state based on activity
+            State.queuedStart := false                                  ; Clear any queued start request
+        } finally {
+            ; Always release lock
+            State.stateLock := false
+        }
+    }
+    
+    ; Performance statistics
+    static cycleCount := 0           ; Number of completed refine cycles
+    static autoUnityCount := 0       ; Number of completed Auto Unity cycles (max 76)
+    static startTime := 0            ; When the current macro run started
+    static currentMacro := "standard"  ; Active macro type (default: standard)
+    static gameState := "early"      ; Game progression state (default: early)
+    static cycleTimes := []          ; Array of recent cycle completion times
+    static lastCycleEnd := 0        ; Timestamp of last cycle completion
+    
+    ; User-configurable settings with defaults
+    static mineralLevel := "999"     ; Highest mineral level to spawn
+    static mergeWaitTime := "5000"  ; Milliseconds to wait for minerals to merge (default: 5000)
+    static microDelayMs := 25        ; Small delay between actions (default: 25)
+    static timewarpInterval := "1000" ; Time warp burst interval (default: 1000ms)
+    static exploitWaitTime := "5000"  ; Exploit wait time (default: 5000ms)
+    static bwThreshold := 128        ; Black/white threshold for screenshot processing
+    
+    ; Custom game state values
+    static customSpawnReps := "4"    ; Custom spawn repetitions
+    static customPolishReps := "1"   ; Custom polish repetitions
+    static autoUnityMaxReps := "24"   ; Auto Unity maximum repetitions
+    static zodiacRedistributionWait := "200"  ; Zodiac redistribution wait time (ms)
+    
+    ; Fine Settings toggles (true = enabled/auto, false = disabled/no auto)
+    static autoRefining := true      ; Auto refining enabled (default: true)
+    static autoRftUpgrade := false    ; Auto RfT upgrade enabled (default: false)
+    static allWeaponsPolish := false ; Polish all weapons vs sword only (default: false)
+    
+    ; Automation Unlockables (false = locked/manual, true = unlocked/auto)
+    static autospawnUnlocked := false     ; Autospawn feature unlocked (default: false)
+    static automergeUnlocked := false     ; Automerge feature unlocked (default: false)
+    static autoMaxLevelUnlocked := false  ; Auto max level upgrade unlocked (default: false)
+    static autoWeaponPolishUnlocked := false ; Auto weapon polish unlocked (default: false)
+    
+    ; Unity Parameters (zodiac element selection)
+    static zodiacEarth := true            ; Earth zodiac element selected (default: true)
+    static zodiacFire := true             ; Fire zodiac element selected (default: true)
+    static zodiacWind := true             ; Wind zodiac element selected (default: true)
+    static zodiacWater := true           ; Water zodiac element selected (default: true)
+    static currentZodiacIndex := 0        ; Current zodiac index for cycling
+    static timeWarpWaitTime := "10000"     ; Time warp wait time in milliseconds (default: 10000)
+    static timeWarpReps := "1"            ; Number of time warp loops before uniting (default: 1)
+    static timeWarpMinutesToSpend := "10"  ; Time warp minutes to spend (default: 10)
+    
+    ; UI section visibility states
+    ; Section states - supports nested sections with dot notation
+    static sectionStates := Map(
+        ; Hierarchical structure matching .ini file organization
+        "refining", false,
+        "refining.macros", true,
+        "refining.statistics", true,
+        "refining.parameters", false,
+        "refining.parameters.gamestate", true,
+        "refining.parameters.finesettings", true,
+        "refining.parameters.unlockables", true,
+        "refining.parameters.variables", true,
+        
+        "unity", false,
+        "unity.macros", true,
+        "unity.parameters", false,
+        "unity.parameters.zodiac", true,
+        "unity.parameters.timewarp", true,
+        
+        "other", false,
+        "other.macros", true,
+        "other.parameters", false,
+        "other.coordinates", false,
+        "other.info", false,
+        
+        ; Legacy sections (for migration compatibility)
+        "macro", true,
+        "gamestate", true,
+        "finesettings", true,
+        "unlockables", true,
+        "variables", true,
+        "unityparameters", true,
+        "statistics", true,
+        "info", true
+    )
+    
+    ; Screenshot capture settings
+    static lastScreenshotPath := ""
+    static captureRect := {x: 1017, y: 386, w: 470, h: 49}
+    static captureMode := "screen"
+    
+    ; Coordinate picker state
+    static isPickingCoordinate := false
+    static currentCoordinateName := ""
+    static coordinatePickerHotkey := ""
+    
+    ; Game coordinates - moved from Config class for dynamic management
     static coords := Map(
         ; Mineral spawning buttons
         "spawn", [809, 1454],
@@ -94,6 +276,7 @@ class Config {
         ; Time warp controls
         "timewarpStart", [785, 1055],
         "timewarpStop", [1200, 895],
+        "timeWarpMinutesSpend", [430, 1060],
         
         ; Shop actions
         "buyTimeFlux", [1200, 1400],
@@ -108,80 +291,14 @@ class Config {
         "zodiacEarth", [1200, 400],
         "zodiacFire", [850, 750],
         
+        ; Zodiac Redistribution actions
+        "redistributionTopBox", [450, 1030],
+        "redistributionBottomBox", [450, 1430],
+        "redistribute", [450, 1290],
+        
         ; Empty space for endgame exploit
         "emptySpace", [833, 1217]
     )
-    
-    ; Order in which to level up weapons
-    static weaponOrder := ["sword", "knuckle", "axe", "spear", "bow"]
-}
-
-; ================================================================================
-; GLOBAL STATE MANAGEMENT
-; ================================================================================
-
-class State {
-    ; Macro execution state flags
-    static isRunning := false        ; Is the macro currently running?
-    static isStarting := false       ; Is the macro in the process of starting?
-    static isStopping := false       ; Is the macro in the process of stopping?
-    static isLocked := false         ; Is the macro locked (prevents multiple starts)?
-    static queuedStart := false      ; Is there a queued start request?
-    
-    ; Performance statistics
-    static cycleCount := 0           ; Number of completed refine cycles
-    static startTime := 0            ; When the current macro run started
-    static currentMacro := "standard"  ; Active macro type (default: standard)
-    static gameState := "early"      ; Game progression state (default: early)
-    static cycleTimes := []          ; Array of recent cycle completion times
-    static lastCycleEnd := 0        ; Timestamp of last cycle completion
-    
-    ; User-configurable settings with defaults
-    static mineralLevel := "999"     ; Highest mineral level to spawn
-    static mergeWaitTime := "10000"  ; Milliseconds to wait for minerals to merge (default: 10000)
-    static microDelayMs := 25        ; Small delay between actions (default: 25)
-    static timewarpInterval := "10000" ; Time warp burst interval (default: 10000ms)
-    static exploitWaitTime := "500"  ; Exploit wait time (default: 500ms)
-    static bwThreshold := 128        ; Black/white threshold for screenshot processing
-    
-    ; Custom game state values
-    static customSpawnReps := "4"    ; Custom spawn repetitions
-    static customPolishReps := "1"   ; Custom polish repetitions
-    
-    ; Fine Settings toggles (true = enabled/auto, false = disabled/no auto)
-    static autoRefining := true      ; Auto refining enabled (default: true)
-    static autoRftUpgrade := true    ; Auto RfT upgrade enabled (default: true)
-    static allWeaponsPolish := false ; Polish all weapons vs sword only (default: false)
-    
-    ; Automation Unlockables (false = locked/manual, true = unlocked/auto)
-    static autospawnUnlocked := false     ; Autospawn feature unlocked (default: false)
-    static automergeUnlocked := false     ; Automerge feature unlocked (default: false)
-    static autoMaxLevelUnlocked := false  ; Auto max level upgrade unlocked (default: false)
-    static autoWeaponPolishUnlocked := false ; Auto weapon polish unlocked (default: false)
-    
-    ; Unity Parameters (zodiac element selection)
-    static zodiacEarth := false           ; Earth zodiac element selected (default: false)
-    static zodiacFire := false            ; Fire zodiac element selected (default: false)
-    static zodiacWind := false            ; Wind zodiac element selected (default: false)
-    static zodiacWater := false           ; Water zodiac element selected (default: false)
-    static currentZodiacIndex := 0        ; Current zodiac index for cycling
-    
-    ; UI section visibility states
-    static sectionStates := Map(
-        "macro", true,
-        "gamestate", true,
-        "finesettings", true,
-        "unlockables", true,
-        "variables", true,
-        "unityparameters", true,
-        "statistics", true,
-        "info", true
-    )
-    
-    ; Screenshot capture settings
-    static lastScreenshotPath := ""
-    static captureRect := {x: 1017, y: 386, w: 470, h: 49}
-    static captureMode := "screen"
 }
 
 ; ================================================================================
@@ -198,6 +315,16 @@ class UI {
     ; GDI+ token for screenshot functionality
     static gdiToken := 0
     
+    ; UI update optimization
+    static needsUpdate := false
+    static lastUpdateTime := 0
+    static updateInterval := Constants.UI_UPDATE_INTERVAL
+    
+    ; Mark UI as needing update
+    static MarkDirty() {
+        UI.needsUpdate := true
+    }
+    
     ; UI state tracking
     static buttonStates := Map()      ; Track button active states
     static sectionContents := Map()   ; Store controls for each collapsible section
@@ -213,6 +340,7 @@ class UI {
     
     ; Section headers for collapsible sections
     static sectionHeaders := Map()
+    static sectionBorders := Map()  ; Track border elements for each section
     
     ; Macro selection buttons
     static btnMacroStandard := 0
@@ -223,6 +351,7 @@ class UI {
     static btnMacroAutoClicker := 0
     static btnMacroTimeFluxBuy := 0
     static btnMacroAutoUnity := 0
+    static btnMacroZodiacRedistribution := 0
     
     ; Game state selection buttons
     static btnStateEarly := 0
@@ -252,6 +381,8 @@ class UI {
     static inputMicroDelay := 0
     static lblTimewarp := 0
     static inputTimewarp := 0
+    static lblTimeWarpMinutesToSpend := 0
+    static inputTimeWarpMinutesToSpend := 0
     static lblExploitWait := 0
     static inputExploitWait := 0
     
@@ -261,6 +392,16 @@ class UI {
     static btnZodiacWind := 0
     static btnZodiacWater := 0
     
+    ; Unity Parameters inputs
+    static lblTimeWarpWaitTime := 0
+    static inputTimeWarpWaitTime := 0
+    static lblTimeWarpReps := 0
+    static inputTimeWarpReps := 0
+    static lblAutoUnityMaxReps := 0
+    static inputAutoUnityMaxReps := 0
+    static lblZodiacRedistributionWait := 0
+    static inputZodiacRedistributionWait := 0
+    
     ; Statistics display controls
     static imgPreview := 0
     static lblStatistics := 0
@@ -269,12 +410,20 @@ class UI {
     ; Info section control
     static lblInfo := 0
     
+    ; Coordinate ListView control
+    static coordListView := 0
+    static headerHwnd := 0
+    
     ; Layout constants
-    static hudW := 540     ; HUD window width
-    static pad := 16       ; Padding around elements
-    static gap := 10       ; Gap between buttons
-    static btnH := 34      ; Standard button height
-    static hdrH := 42      ; Header height
+    static hudW := 580     ; HUD window width
+    
+    ; UI spacing - now using standardized constants
+    static pad := Constants.UI_PAD
+    static gap := Constants.UI_GAP
+    static btnH := Constants.UI_BUTTON_HEIGHT
+    static hdrH := 42      ; Header height for UI elements
+    static rowGap := Constants.UI_ROW_GAP
+    static sectionGap := Constants.UI_SECTION_GAP
 }
 
 ; ================================================================================
@@ -333,30 +482,30 @@ class ConfigManager {
     static Load() {
         ini := Config.CONFIG_FILE
         
-        ; Load macro and game state settings
-        State.currentMacro := IniRead(ini, "Settings", "Macro", "standard")
-        State.gameState := IniRead(ini, "Settings", "GameState", "early")
-        State.mineralLevel := IniRead(ini, "Settings", "MineralLevel", "999")
-        State.mergeWaitTime := IniRead(ini, "Settings", "MergeWaitTime", "10000")
-        State.bwThreshold := IniRead(ini, "Settings", "BWThreshold", 128) + 0
-        State.timewarpInterval := IniRead(ini, "Settings", "TimewarpInterval", "10000")
-        State.exploitWaitTime := IniRead(ini, "Settings", "ExploitWaitTime", "500")
+        ; Load macro and game state settings with validation
+        State.currentMacro := Validator.ValidateMacro(IniRead(ini, "Settings", "Macro", "standard"))
+        State.gameState := Validator.ValidateGameState(IniRead(ini, "Settings", "GameState", "early"))
+        State.mineralLevel := Validator.ValidateString(IniRead(ini, "Settings", "MineralLevel", "999"), 10, "999")
+        State.mergeWaitTime := Validator.ValidateString(IniRead(ini, "Settings", "MergeWaitTime", "5000"), 10, "5000")
+        State.bwThreshold := Validator.ValidateNumericRange(IniRead(ini, "Settings", "BWThreshold", 128) + 0, Constants.MIN_THRESHOLD, Constants.MAX_THRESHOLD, 128)
+        State.timewarpInterval := Validator.ValidateString(IniRead(ini, "Settings", "TimewarpInterval", "1000"), 10, "1000")
+        State.exploitWaitTime := Validator.ValidateString(IniRead(ini, "Settings", "ExploitWaitTime", "5000"), 10, "5000")
         
-        ; Load custom game state values
-        State.customSpawnReps := IniRead(ini, "Settings", "CustomSpawnReps", "4")
-        State.customPolishReps := IniRead(ini, "Settings", "CustomPolishReps", "1")
+        ; Load custom game state values with validation
+        State.customSpawnReps := Validator.ValidateString(IniRead(ini, "Settings", "CustomSpawnReps", "4"), 5, "4")
+        State.customPolishReps := Validator.ValidateString(IniRead(ini, "Settings", "CustomPolishReps", "1"), 5, "1")
         
-        ; Load delay setting with backward compatibility
-        State.microDelayMs := IniRead(ini, "Settings", "MicroDelayMs", 25) + 0
+        ; Load delay setting with validation and backward compatibility
+        State.microDelayMs := Validator.ValidateNumericRange(IniRead(ini, "Settings", "MicroDelayMs", 25) + 0, Constants.MIN_DELAY, Constants.MAX_DELAY, 25)
         oldDelay := IniRead(ini, "Settings", "MICRO_DELAY", "")
         if (oldDelay != "" && State.microDelayMs = 25) {
-            State.microDelayMs := oldDelay + 0
+            State.microDelayMs := Validator.ValidateNumericRange(oldDelay + 0, Constants.MIN_DELAY, Constants.MAX_DELAY, 25)
         }
         
-        ; Load Fine Settings toggles (all default to true)
-        State.autoRefining := (IniRead(ini, "FineSettings", "AutoRefining", 1) + 0) ? true : false
-        State.autoRftUpgrade := (IniRead(ini, "FineSettings", "AutoRftUpgrade", 1) + 0) ? true : false
-        State.allWeaponsPolish := (IniRead(ini, "FineSettings", "AllWeaponsPolish", 0) + 0) ? true : false
+        ; Load Fine Settings toggles with validation (all default to true)
+        State.autoRefining := Validator.ValidateBoolean(IniRead(ini, "FineSettings", "AutoRefining", 1))
+        State.autoRftUpgrade := Validator.ValidateBoolean(IniRead(ini, "FineSettings", "AutoRftUpgrade", 0))
+        State.allWeaponsPolish := Validator.ValidateBoolean(IniRead(ini, "FineSettings", "AllWeaponsPolish", 0))
         
         ; Load Automation Unlockables (all default to false)
         State.autospawnUnlocked := (IniRead(ini, "Unlockables", "AutospawnUnlocked", 0) + 0) ? true : false
@@ -365,14 +514,19 @@ class ConfigManager {
         State.autoWeaponPolishUnlocked := (IniRead(ini, "Unlockables", "AutoWeaponPolishUnlocked", 0) + 0) ? true : false
         
         ; Load Unity Parameters (all default to false)
-        State.zodiacEarth := (IniRead(ini, "UnityParameters", "ZodiacEarth", 0) + 0) ? true : false
-        State.zodiacFire := (IniRead(ini, "UnityParameters", "ZodiacFire", 0) + 0) ? true : false
+        State.zodiacEarth := (IniRead(ini, "UnityParameters", "ZodiacEarth", 1) + 0) ? true : false
+        State.zodiacFire := (IniRead(ini, "UnityParameters", "ZodiacFire", 1) + 0) ? true : false
         State.zodiacWind := (IniRead(ini, "UnityParameters", "ZodiacWind", 0) + 0) ? true : false
         State.zodiacWater := (IniRead(ini, "UnityParameters", "ZodiacWater", 0) + 0) ? true : false
+        State.timeWarpWaitTime := IniRead(ini, "UnityParameters", "TimeWarpWaitTime", "5000")
+        State.timeWarpReps := IniRead(ini, "UnityParameters", "TimeWarpReps", "1")
+        State.timeWarpMinutesToSpend := IniRead(ini, "UnityParameters", "TimeWarpMinutesToSpend", "10")
+        State.autoUnityMaxReps := IniRead(ini, "UnityParameters", "AutoUnityMaxReps", "24")
+        State.zodiacRedistributionWait := IniRead(ini, "UnityParameters", "ZodiacRedistributionWait", "200")
         
-        ; Load section visibility states
-        for section in ["macro", "gamestate", "finesettings", "unlockables", "variables", "unityparameters", "statistics", "info"] {
-            State.sectionStates[section] := (IniRead(ini, "Sections", section, 1) + 0) ? true : false
+        ; Load section visibility states - iterate through all defined sections
+        for section, defaultState in State.sectionStates {
+            State.sectionStates[section] := (IniRead(ini, "Sections", section, defaultState ? 1 : 0) + 0) ? true : false
         }
         
         ; Load screenshot capture settings
@@ -381,6 +535,13 @@ class ConfigManager {
         State.captureRect.w := IniRead(ini, "Capture", "W", State.captureRect.w) + 0
         State.captureRect.h := IniRead(ini, "Capture", "H", State.captureRect.h) + 0
         State.captureMode := IniRead(ini, "Capture", "Mode", State.captureMode)
+        
+        ; Load coordinates - iterate through all defined coordinates
+        for coordName, defaultCoords in State.coords {
+            x := IniRead(ini, "Coordinates", coordName . "_X", defaultCoords[1]) + 0
+            y := IniRead(ini, "Coordinates", coordName . "_Y", defaultCoords[2]) + 0
+            State.coords[coordName] := [x, y]
+        }
     }
     
     ; Save settings to INI file
@@ -425,6 +586,11 @@ class ConfigManager {
         IniWrite (State.zodiacFire ? 1 : 0), ini, "UnityParameters", "ZodiacFire"
         IniWrite (State.zodiacWind ? 1 : 0), ini, "UnityParameters", "ZodiacWind"
         IniWrite (State.zodiacWater ? 1 : 0), ini, "UnityParameters", "ZodiacWater"
+        IniWrite State.timeWarpWaitTime, ini, "UnityParameters", "TimeWarpWaitTime"
+        IniWrite State.timeWarpReps, ini, "UnityParameters", "TimeWarpReps"
+        IniWrite State.timeWarpMinutesToSpend, ini, "UnityParameters", "TimeWarpMinutesToSpend"
+        IniWrite State.autoUnityMaxReps, ini, "UnityParameters", "AutoUnityMaxReps"
+        IniWrite State.zodiacRedistributionWait, ini, "UnityParameters", "ZodiacRedistributionWait"
         
         ; Save section states
         for section, isOpen in State.sectionStates {
@@ -437,6 +603,112 @@ class ConfigManager {
         IniWrite State.captureRect.w, ini, "Capture", "W"
         IniWrite State.captureRect.h, ini, "Capture", "H"
         IniWrite State.captureMode, ini, "Capture", "Mode"
+        
+        ; Save coordinates
+        for coordName, coords in State.coords {
+            IniWrite coords[1], ini, "Coordinates", coordName . "_X"
+            IniWrite coords[2], ini, "Coordinates", coordName . "_Y"
+        }
+    }
+}
+
+; ================================================================================
+; ERROR HANDLING
+; ================================================================================
+
+class ErrorHandler {
+    static logFile := A_ScriptDir "\RevolutionIdleHelper_errors.log"
+    static maxLogSize := Constants.MAX_LOG_SIZE
+    
+    ; Log errors with timestamps
+    static LogError(source, error, context := "") {
+        try {
+            timestamp := FormatTime(A_Now, "yyyy-MM-dd HH:mm:ss")
+            errorMsg := Format("{1} [{2}] {3}: {4}", timestamp, source, error.message, context)
+            if context != ""
+                errorMsg .= " (" context ")"
+            errorMsg .= "`n"
+            
+            ; Check log file size and rotate if needed
+            if FileExist(ErrorHandler.logFile) {
+                logFile := FileOpen(ErrorHandler.logFile, "r")
+                if logFile && logFile.Length > ErrorHandler.maxLogSize {
+                    logFile.Close()
+                    try FileMove ErrorHandler.logFile, ErrorHandler.logFile ".old"
+                } else if logFile {
+                    logFile.Close()
+                }
+            }
+            
+            FileAppend errorMsg, ErrorHandler.logFile
+        } catch {
+            ; Silent fail if logging fails
+        }
+    }
+    
+    ; Handle critical errors that should stop the script
+    static HandleCriticalError(source, error, context := "") {
+        ErrorHandler.LogError(source, error, context)
+        State.SetSafeState(false)  ; Stop all operations
+        if UI.gui && IsObject(UI.gui) {
+            try UI.gui.Title := "Revolution Idle Helper v1.2 - ERROR: " error.message
+        }
+    }
+}
+
+; ================================================================================
+; INPUT VALIDATION
+; ================================================================================
+
+class Validator {
+    ; Validate numeric ranges with fallback defaults
+    static ValidateNumericRange(value, min, max, defaultValue) {
+        if !IsNumber(value) || value < min || value > max
+            return defaultValue
+        return Integer(value)
+    }
+    
+    ; Validate coordinates
+    static ValidateCoordinates(coords) {
+        if !IsObject(coords) || coords.Length < 2
+            return false
+        return IsNumber(coords[1]) && IsNumber(coords[2]) && 
+               coords[1] >= Constants.MIN_COORDINATE && coords[1] <= Constants.MAX_COORDINATE &&
+               coords[2] >= Constants.MIN_COORDINATE && coords[2] <= Constants.MAX_COORDINATE
+    }
+    
+    ; Validate macro name
+    static ValidateMacro(value) {
+        validMacros := ["standard", "quick", "long", "timewarp", "autoclicker", "endgame", "timefluxbuy", "autounity", "zodiacredistribution"]
+        for macroName in validMacros {
+            if macroName = value
+                return value
+        }
+        return "standard"
+    }
+    
+    ; Validate game state
+    static ValidateGameState(value) {
+        validStates := ["early", "mid", "late", "custom"]
+        for stateName in validStates {
+            if stateName = value
+                return value
+        }
+        return "early"
+    }
+    
+    ; Validate string input
+    static ValidateString(value, maxLength := 100, defaultValue := "") {
+        if (Type(value) != "String" || StrLen(value) > maxLength)
+            return defaultValue
+        return value
+    }
+    
+    ; Validate boolean from INI (handles "1"/"0" strings)
+    static ValidateBoolean(value) {
+        if (Type(value) = "String")
+            return (value = "1" || value = "true")
+        return !!value
     }
 }
 
@@ -445,25 +717,41 @@ class ConfigManager {
 ; ================================================================================
 
 class Action {
-    ; Click at a named coordinate from the Config.coords map
+    ; Click at a named coordinate from the State.coords map
     static Click(name) {
-        if !State.isRunning || !Config.coords.Has(name) || Util.IsGameBlocked()
+        if !State.isRunning || !State.coords.Has(name) || Util.IsGameBlocked()
             return false
-        xy := Config.coords[name]
-        Click xy[1], xy[2]
-        Util.Sleep(State.microDelayMs)
-        return true
+        
+        try {
+            xy := State.coords[name]
+            if !IsObject(xy) || xy.Length < 2 || !IsNumber(xy[1]) || !IsNumber(xy[2])
+                return false
+            Click xy[1], xy[2]
+            Util.Sleep(State.microDelayMs)
+            return true
+        } catch Error as e {
+            ErrorHandler.LogError("Action.Click", e, "Failed to click: " name)
+            return false
+        }
     }
     
     ; Type text into the game (selects all first)
     static Type(text) {
         if !State.isRunning || Util.IsGameBlocked()
             return false
-        Send "^a"  ; Select all
-        Sleep 30
-        SendText text
-        Util.Sleep(State.microDelayMs)
-        return true
+        
+        try {
+            if (Type(text) != "String" || StrLen(text) = 0)
+                return false
+            Send "^a"  ; Select all
+            Sleep 30
+            SendText text
+            Util.Sleep(State.microDelayMs)
+            return true
+        } catch Error as e {
+            ErrorHandler.LogError("Action.Type", e, "Failed to type: " text)
+            return false
+        }
     }
     
     ; Spawn a single mineral
@@ -599,6 +887,52 @@ class Action {
         
         State.cycleCount += 1
         UIManager.Update()
+    }
+    
+    ; Drag from one named coordinate to another
+    static Drag(fromName, toName) {
+        if !State.isRunning || !State.coords.Has(fromName) || !State.coords.Has(toName) || Util.IsGameBlocked()
+            return false
+        
+        try {
+            fromXY := State.coords[fromName]
+            toXY := State.coords[toName]
+            
+            ; Validate coordinates
+            if !IsObject(fromXY) || !IsObject(toXY) || fromXY.Length < 2 || toXY.Length < 2
+                return false
+            if !IsNumber(fromXY[1]) || !IsNumber(fromXY[2]) || !IsNumber(toXY[1]) || !IsNumber(toXY[2])
+                return false
+            
+            ; Try using SendInput for more reliable drag
+            ; First click to ensure the element is selected
+            Click fromXY[1], fromXY[2]
+            Util.Sleep(State.microDelayMs)
+            
+            ; Use SendInput for drag operation
+            SendInput "{LButton Down}"
+            Util.Sleep(State.microDelayMs)
+            
+            ; Move to starting position while button is down
+            MouseMove fromXY[1], fromXY[2], 0
+            Util.Sleep(State.microDelayMs)
+            
+            ; Move to destination
+            MouseMove toXY[1], toXY[2], 0
+            Util.Sleep(State.microDelayMs)
+            
+            ; Release button
+            SendInput "{LButton Up}"
+            Util.Sleep(State.microDelayMs)
+            
+            Util.Sleep(State.microDelayMs)
+            return true
+        } catch Error as e {
+            ; Ensure mouse button is released on error
+            try SendInput "{LButton Up}"
+            ErrorHandler.LogError("Action.Drag", e, "Failed drag: " fromName " to " toName)
+            return false
+        }
     }
 }
 
@@ -804,7 +1138,7 @@ class Macro {
                 ; Level up, spawn, reset to level 1, spawn, wait
                 Action.SetMineralLevel("999")
                 Action.SpawnMineral()
-                Action.SetMineralLevel("1")
+                Action.SetMineralLevel(State.mineralLevel)
                 Action.Click("emptySpace")
                 Util.Sleep(Sequence.GetExploitWaitTime())
             }
@@ -863,7 +1197,7 @@ class Macro {
                         
                         Action.SetMineralLevel("999")
                         Action.SpawnMineral()
-                        Action.SetMineralLevel("1")
+                        Action.SetMineralLevel(State.mineralLevel)
                         Action.Click([833, 1217])
                         Util.Sleep(Sequence.GetExploitWaitTime())
                     }
@@ -893,7 +1227,7 @@ class Macro {
                     
                     Action.SetMineralLevel("999")
                     Action.SpawnMineral()
-                    Action.SetMineralLevel("1")
+                    Action.SetMineralLevel(State.mineralLevel)
                     Action.Click([833, 1217])
                     Util.Sleep(Sequence.GetExploitWaitTime())
                 }
@@ -907,6 +1241,20 @@ class Macro {
     
     ; Time Warp Burst macro - toggles time warp on and off
     static TimeWarp() {
+        ; Initial setup - click Time Flux tab and set minutes to spend (only once)
+        if State.isRunning {
+            ; Go to Time Flux Tab
+            Action.Click("timeFluxTab")
+            Util.Sleep(Constants.TAB_TRANSITION_WAIT)
+            
+            ; Click on the minutes to spend field and enter the value
+            Action.Click("timeWarpMinutesSpend")
+            Action.Type(State.timeWarpMinutesToSpend)
+            
+            Util.Sleep(State.microDelayMs)
+        }
+        
+        ; Continue with the existing loop indefinitely
         while State.isRunning {
             if !State.isRunning
                 return
@@ -938,21 +1286,47 @@ class Macro {
         }
     }
     
-    ; Time Flux Buy macro - loops between buyTimeFlux and purchaseConfirm
+    ; Time Flux Buy macro - clicks shop once, then loops buy and confirm
     static TimeFluxBuy() {
         if State.isRunning {
             Util.Sleep(State.microDelayMs)
             
-            ; Go to Shop tab
+            ; Go to Shop tab only once
             Action.Click("shopTab")
             Util.Sleep(State.microDelayMs)
             
-            ; Buy Time Flux
-            Action.Click("buyTimeFlux")
+            ; Loop buying Time Flux while running
+            while State.isRunning {
+                ; Buy Time Flux
+                Action.Click("buyTimeFlux")
+                Util.Sleep(State.microDelayMs)
+                
+                ; Confirm purchase
+                Action.Click("purchaseConfirm")
+                Util.Sleep(State.microDelayMs)
+            }
+        }
+    }
+    
+    ; Zodiac Redistribution macro - drag points from bottom to top
+    static ZodiacRedistribution() {
+        if State.isRunning {
             Util.Sleep(State.microDelayMs)
             
-            ; Confirm purchase
-            Action.Click("purchaseConfirm")
+            ; Click Redistribute button
+            Action.Click("redistribute")
+            
+            ; Click bottom redistribution box
+            Action.Click("redistributionBottomBox")
+            Util.Sleep(State.zodiacRedistributionWait + 0)  ; Wait after clicking bottom box (before dragging)
+            
+            ; Try drag operation
+            Action.Drag("redistributionBottomBox", "redistributionTopBox")
+            
+            ; Alternative: if drag doesn't work, try clicking top box directly
+            Util.Sleep(State.microDelayMs)
+            Action.Click("redistributionTopBox")
+            
             Util.Sleep(State.microDelayMs)
         }
     }
@@ -964,15 +1338,26 @@ class Macro {
             
             ; Go to Time Flux Tab
             Action.Click("timeFluxTab")
-            Util.Sleep(250)  ; Wait for Time Flux tab to load
+            Util.Sleep(Constants.TAB_TRANSITION_WAIT)  ; Wait for Time Flux tab to load
             
-            ; Click Time Warp Start
-            Action.Click("timewarpStart")
-            Util.Sleep(State.timewarpInterval)
+            ; Get time warp reps count
+            reps := State.timeWarpReps + 0
+            if (reps <= 0)
+                reps := 1
             
-            ; Click Time Warp Stop
-            Action.Click("timewarpStop")
-            Util.Sleep(250)  ; Wait after stopping time warp
+            ; Perform time warp loops
+            Loop reps {
+                if !State.isRunning
+                    break
+                    
+                ; Click Time Warp Start
+                Action.Click("timewarpStart")
+                Util.Sleep(State.timeWarpWaitTime + 0)
+                
+                ; Click Time Warp Stop
+                Action.Click("timewarpStop")
+                Util.Sleep(Constants.TAB_TRANSITION_WAIT)  ; Wait after stopping time warp
+            }
             
             ; Go to Attacks tab
             Action.Click("attacksTab")
@@ -980,7 +1365,7 @@ class Macro {
             
             ; Click Unite
             Action.Click("unite")
-            Util.Sleep(800)  ; Wait for Unite dialog to appear
+            Util.Sleep(Constants.UNITE_DIALOG_WAIT)  ; Wait for Unite dialog to appear
             
             ; Click selected zodiac (cycle through selected ones)
             zodiacType := Macro.GetNextZodiac()
@@ -1089,7 +1474,7 @@ class Screenshot {
         }
         
         ; Clean up old screenshots
-        Screenshot.CleanOldFiles(12)
+        Screenshot.CleanOldFiles()
     }
     
     ; Capture a rectangular area of the screen
@@ -1190,12 +1575,62 @@ class Screenshot {
     }
     
     ; Clean up old screenshot files
-    static CleanOldFiles(hours) {
-        dir := A_Temp
-        Loop Files dir "\refine_shot_*.png" {
-            if (DateDiff(A_Now, A_LoopFileTimeModified, "Seconds") > hours * 3600) {
-                try FileDelete A_LoopFileFullPath
+    static CleanOldFiles(maxFiles := Constants.SCREENSHOT_MAX_FILES, maxHours := Constants.SCREENSHOT_CLEANUP_HOURS) {
+        try {
+            ; Collect all screenshot files with metadata
+            files := []  ; Array to store screenshot file information
+            dir := A_Temp  ; Temporary directory path
+            ; Collect all refine screenshot files in temp directory
+            Loop Files dir "\refine_shot_*.png" {
+                files.Push({
+                    path: A_LoopFileFullPath, 
+                    time: A_LoopFileTimeModified,
+                    size: A_LoopFileSize
+                })
             }
+            
+            ; Files are processed in order found (no sorting applied)
+            
+            ; Delete old files based on age and count limits
+            if (files.Length > 0) {
+                deleteCount := 0
+                Loop files.Length {
+                    i := A_Index
+                    
+                    ; Safety checks for array bounds and object validity
+                    if (i > files.Length) 
+                        break
+                    
+                    fileInfo := files[i]
+                    if (!IsObject(fileInfo) || !fileInfo.HasOwnProp("path") || !fileInfo.HasOwnProp("time"))
+                        continue
+                        
+                    filePath := fileInfo.path
+                    if (filePath = "" || !FileExist(filePath))
+                        continue
+                    
+                    hoursOld := DateDiff(A_Now, fileInfo.time, "Hours")
+                    
+                    ; Delete if too old or beyond file limit
+                    if (i > maxFiles || hoursOld > maxHours) {
+                        ; Check file accessibility before deletion
+                        try {
+                            ; Verify file is accessible
+                            FileGetAttrib(filePath)
+                            
+                            ; Delete the file
+                            FileDelete filePath
+                            deleteCount++
+                        } catch Error as e {
+                            ; Continue to next file if deletion fails
+                            continue
+                        }
+                    }
+                }
+            }
+            
+        } catch Error as e {
+            ; Ignore cleanup errors silently
         }
     }
 }
@@ -1217,6 +1652,9 @@ class UIManager {
         UIManager.SetupEventHandlers()
         UIManager.UpdateVisuals()
         SetTimer(() => UIManager.Update(), Config.UI_UPDATE_INTERVAL)
+        
+        ; Set up periodic config auto-save (every 10 seconds)
+        SetTimer(() => ConfigManager.Save(), 10000)
     }
     
     ; Create the main GUI window
@@ -1234,7 +1672,22 @@ class UIManager {
         btnH := UI.btnH
         hdrH := UI.hdrH
         
-        ; Initialize section contents map
+        ; Initialize section contents map for hierarchical structure
+        UI.sectionContents["refining.macros"] := []
+        UI.sectionContents["refining.statistics"] := []
+        UI.sectionContents["refining.parameters.gamestate"] := []
+        UI.sectionContents["refining.parameters.finesettings"] := []
+        UI.sectionContents["refining.parameters.unlockables"] := []
+        UI.sectionContents["refining.parameters.variables"] := []
+        UI.sectionContents["unity.macros"] := []
+        UI.sectionContents["unity.parameters.zodiac"] := []
+        UI.sectionContents["unity.parameters.timewarp"] := []
+        UI.sectionContents["other.macros"] := []
+        UI.sectionContents["other.parameters"] := []
+        UI.sectionContents["other.coordinates"] := []
+        UI.sectionContents["other.info"] := []
+        
+        ; Legacy section contents (for migration compatibility)
         UI.sectionContents["macro"] := []
         UI.sectionContents["gamestate"] := []
         UI.sectionContents["finesettings"] := []
@@ -1245,7 +1698,7 @@ class UIManager {
         UI.sectionContents["info"] := []
         
         ; Window width configuration
-        UI.hudW := 540  ; Optimal width for all sections
+        UI.hudW := 580  ; Optimal width for all sections
         
         y := 0
         
@@ -1257,7 +1710,7 @@ class UIManager {
         titleX := 55
         titleY := (hdrH - 26) // 2
         UI.titleText := UI.gui.AddText(Format("x{} y{} w{} h26 Center +BackgroundFFFFFF", 
-                                       titleX, titleY, titleW), "Refine Tree Helper v1.1")
+                                       titleX, titleY, titleW), "Revolution Idle Helper v1.2")
         UI.titleText.SetFont("Bold s11 c000000", "Cascadia Mono")
         
         ; Eye icon (left) - BLACK on white background
@@ -1287,395 +1740,700 @@ class UIManager {
         
         y += btnH + pad
         
-        ; MACRO SECTION
-        UIManager.CreateSectionHeader("macro", y, UI.hudW, "Select Macro")
-        y += 32
+        ; ═══════════════════════════════════════════════════════════
+        ; HIERARCHICAL SECTIONS - UI ORGANIZATION
+        ; ═══════════════════════════════════════════════════════════
         
-        if State.sectionStates["macro"] {
-            ; Row 1: Standard, Quick, Long
-            btnW := 120  ; Macro selection button width
-            totalW := (btnW * 3) + (gap * 2)
-            x := (UI.hudW - totalW) // 2
+        ; ═══ SECTION 1: MINERALS & REFINING HELPER ═══
+        sectionH := UIManager.CreateBigSectionHeader("refining", y, UI.hudW, "MINERALS && REFINING HELPER")
+        y += sectionH + UI.rowGap
+        
+        if State.sectionStates["refining"] {
+            ; • MACROS SUBSECTION
+            UIManager.CreateSubSectionHeader("refining.macros", y, UI.hudW, "Macro Selection", 24)
+            y += 28 + UI.rowGap
             
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Standard", false)
-            UI.btnMacroStandard := btn
-            UI.sectionContents["macro"].Push(btn)
+            if State.sectionStates["refining.macros"] {
+                ; Refining macro buttons
+                btnW := Constants.UI_BTN_TINY  ; Short text macro buttons
+                totalW := (btnW * 3) + (gap * 2)
+                x := (UI.hudW - totalW) // 2  ; Center without indentation
+                
+                btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Standard", false)
+                UI.btnMacroStandard := btn
+                UI.sectionContents["refining.macros"].Push(btn)
+                
+                x += btnW + gap
+                btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Quick", false)
+                UI.btnMacroQuick := btn
+                UI.sectionContents["refining.macros"].Push(btn)
+                
+                x += btnW + gap
+                btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Long", false)
+                UI.btnMacroLong := btn
+                UI.sectionContents["refining.macros"].Push(btn)
+                
+                y += btnH + UI.rowGap
+                
+                ; Endgame Exploit (centered in subsection)
+                btnW := Constants.UI_BTN_XLARGE  
+                x := (UI.hudW - btnW) // 2  ; Center without indentation
+                
+                btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Endgame Exploit", false)
+                UI.btnMacroEndgame := btn
+                UI.sectionContents["refining.macros"].Push(btn)
+                
+                y += btnH + UI.sectionGap
+            }
             
-            x += btnW + gap
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Quick", false)
-            UI.btnMacroQuick := btn
-            UI.sectionContents["macro"].Push(btn)
+            ; ┌─ STATISTICS SUBSECTION ─┐
+            UIManager.CreateSubSectionHeader("refining.statistics", y, UI.hudW, "Game Statistics", 24)
+            y += 28 + UI.rowGap
             
-            x += btnW + gap
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Long", false)
-            UI.btnMacroLong := btn
-            UI.sectionContents["macro"].Push(btn)
+            if State.sectionStates["refining.statistics"] {
+                ; Preview image for screenshots (indented)
+                previewW := UI.hudW - 2*pad - 24  ; Account for indentation
+                rect := State.captureRect
+                previewH := Max(20, Round(previewW * rect.h / Max(rect.w, 1)))
+                pic := UI.gui.AddPicture(Format("x{} y{} w{} h{} +Border", pad + 12, y, previewW, previewH), "")
+                UI.imgPreview := pic
+                UI.sectionContents["refining.statistics"].Push(pic)
+                
+                y += previewH + gap
+                
+                ; Cycle count display (indented)
+                lbl := UI.gui.AddText(Format("x{} y{} w{} h35", pad + 12, y, previewW), "Cycles: 0")
+                lbl.SetFont("s10", "Cascadia Mono")
+                UI.lblStatistics := lbl
+                UI.sectionContents["refining.statistics"].Push(lbl)
+                
+                y += 35 + 5  ; Minimal spacing between related statistics labels
+                
+                ; Average cycle time display (indented)
+                lbl := UI.gui.AddText(Format("x{} y{} w{} h35", pad + 12, y, previewW), 
+                                             "Avg cycle: --:--:--:-")
+                lbl.SetFont("s10", "Cascadia Mono")
+                UI.lblCycleTime := lbl
+                UI.sectionContents["refining.statistics"].Push(lbl)
+                
+                y += 35 + UI.sectionGap  ; Account for full label height plus section spacing
+            }
             
-            y += btnH + gap
+            ; ┌─ PARAMETERS SUBSECTION ─┐
+            UIManager.CreateSubSectionHeader("refining.parameters", y, UI.hudW, "Parameters", 24)
+            y += 28 + UI.rowGap
             
-            ; Row 2: Time Warp Burst, Autoclicker
-            btnW := 200  ; Time warp and autoclicker button width
-            totalW := (btnW * 2) + gap
-            x := (UI.hudW - totalW) // 2
-            
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Time Warp Burst", false)
-            UI.btnMacroTimeWarp := btn
-            UI.sectionContents["macro"].Push(btn)
-            
-            x += btnW + gap
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Autoclicker", false)
-            UI.btnMacroAutoClicker := btn
-            UI.sectionContents["macro"].Push(btn)
-            
-            y += btnH + gap
-            
-            ; Row 3: Endgame Exploit
-            btnW := 210  ; Endgame exploit button width
-            x := (UI.hudW - btnW) // 2
-            
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Endgame Exploit", false)
-            UI.btnMacroEndgame := btn
-            UI.sectionContents["macro"].Push(btn)
-            
-            y += btnH + gap
-            
-            ; Row 4: Time Flux Buy, Auto Unity
-            btnW := 170  ; Wider for longer text
-            totalW := (btnW * 2) + gap
-            x := (UI.hudW - totalW) // 2
-            
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Time Flux Buy", false)
-            UI.btnMacroTimeFluxBuy := btn
-            UI.sectionContents["macro"].Push(btn)
-            
-            x += btnW + gap
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Auto Unity", false)
-            UI.btnMacroAutoUnity := btn
-            UI.sectionContents["macro"].Push(btn)
-            
-            y += btnH + pad
+            if State.sectionStates["refining.parameters"] {
+                ; Game State selection
+                UIManager.CreateSubSectionHeader("refining.parameters.gamestate", y, UI.hudW, "Game State", 48)
+                y += 28 + UI.rowGap
+                
+                if State.sectionStates["refining.parameters.gamestate"] {
+                    ; Game state buttons (indented more)
+                    btnW := Constants.UI_BTN_SMALL  ; Game state button width
+                    totalW := (btnW * 4) + (gap * 3)
+                    x := (UI.hudW - totalW) // 2  ; Center without indentation
+                    
+                    btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Early", false)
+                    UI.btnStateEarly := btn
+                    UI.sectionContents["refining.parameters.gamestate"].Push(btn)
+                    
+                    x += btnW + gap
+                    btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Mid", false)
+                    UI.btnStateMid := btn
+                    UI.sectionContents["refining.parameters.gamestate"].Push(btn)
+                    
+                    x += btnW + gap
+                    btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Late", false)
+                    UI.btnStateLate := btn
+                    UI.sectionContents["refining.parameters.gamestate"].Push(btn)
+                    
+                    x += btnW + gap
+                    btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Custom", false)
+                    UI.btnStateCustom := btn
+                    UI.sectionContents["refining.parameters.gamestate"].Push(btn)
+                    
+                    y += btnH + UI.rowGap
+                    
+                    ; Custom spawn input (centered with indentation)
+                    lblW := 170  ; Custom input label width
+                    edtW := 50   ; Width for 2-3 characters
+                    customGap := 20  ; Custom gap between label and textbox
+                    totalW := lblW + edtW + Constants.UI_INPUT_GAP
+                    x := (UI.hudW - totalW) // 2 + 12  ; Slight indent for nested elements
+                    
+                    lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y + Constants.UI_LABEL_OFFSET, lblW), "Spawn reps:")
+                    UI.sectionContents["refining.parameters.gamestate"].Push(lbl)
+                    
+                    edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + customGap, y, edtW), State.customSpawnReps)
+                    edt.SetFont("s10 c000000", "Cascadia Mono")
+                    UI.inputCustomSpawn := edt
+                    UI.sectionContents["refining.parameters.gamestate"].Push(edt)
+                    
+                    y += Constants.UI_INPUT_HEIGHT + UI.rowGap
+                    
+                    ; Custom polish input (centered with indentation)
+                    x := (UI.hudW - totalW) // 2 + 12  ; Slight indent for nested elements
+                    lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y + Constants.UI_LABEL_OFFSET, lblW), "Polish reps:")
+                    UI.sectionContents["refining.parameters.gamestate"].Push(lbl)
+                    
+                    edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + customGap, y, edtW), State.customPolishReps)
+                    edt.SetFont("s10 c000000", "Cascadia Mono")
+                    UI.inputCustomPolish := edt
+                    UI.sectionContents["refining.parameters.gamestate"].Push(edt)
+                    
+                    y += Constants.UI_INPUT_HEIGHT + UI.sectionGap
+                }
+                
+                ; Fine Settings
+                UIManager.CreateSubSectionHeader("refining.parameters.finesettings", y, UI.hudW, "Fine Settings", 48)
+                y += 28 + UI.rowGap
+                
+                if State.sectionStates["refining.parameters.finesettings"] {
+                    ; Fine Settings buttons (double indented)
+                    btnW := Constants.UI_BTN_XLARGE  ; Fine settings button width
+                    totalW := (btnW * 2) + gap
+                    x := (UI.hudW - totalW) // 2  ; Center without indentation
+                    
+                    ; Row 1: Auto Refining, Auto RfT Upgrade
+                    btn := UIManager.CreateStyledButton(x, y, btnW, btnH, 
+                        State.autoRefining ? "Auto Refining" : "No Refining", State.autoRefining)
+                    UI.btnToggleRefining := btn
+                    UI.sectionContents["refining.parameters.finesettings"].Push(btn)
+                    
+                    x += btnW + gap
+                    btn := UIManager.CreateStyledButton(x, y, btnW, btnH, 
+                        State.autoRftUpgrade ? "Auto RfT Upg" : "No RfT Upg", State.autoRftUpgrade)
+                    UI.btnToggleRftUpgrade := btn
+                    UI.sectionContents["refining.parameters.finesettings"].Push(btn)
+                    
+                    y += btnH + UI.rowGap
+                    
+                    ; Row 2: Weapon Polish Mode
+                    btnW := Constants.UI_BTN_FULL - 48  ; Adjust for double indentation
+                    x := (UI.hudW - btnW) // 2 + 12  ; Slight indent for nested elements
+                    
+                    btn := UIManager.CreateStyledButton(x, y, btnW, btnH, 
+                        State.allWeaponsPolish ? "All Weapons Polish" : "Sword Polish Only", State.allWeaponsPolish)
+                    UI.btnTogglePolishMode := btn
+                    UI.sectionContents["refining.parameters.finesettings"].Push(btn)
+                    
+                    y += btnH + UI.sectionGap
+                }
+                
+                ; Automation Unlockables
+                UIManager.CreateSubSectionHeader("refining.parameters.unlockables", y, UI.hudW, "Automation Unlockables", 48)
+                y += 28 + UI.rowGap
+                
+                if State.sectionStates["refining.parameters.unlockables"] {
+                    ; Each button on its own line for full width
+                    btnW := Constants.UI_BTN_UNLOCKS - 24  ; Adjust for slight indentation
+                    x := (UI.hudW - btnW) // 2  ; Center without indentation
+                    
+                    ; Row 1: Autospawn
+                    btn := UIManager.CreateStyledButton(x, y, btnW, btnH, 
+                        State.autospawnUnlocked ? "Autospawn UNLOCKED" : "Autospawn LOCKED", State.autospawnUnlocked)
+                    UI.btnToggleAutospawn := btn
+                    UI.sectionContents["refining.parameters.unlockables"].Push(btn)
+                    
+                    y += btnH + UI.rowGap
+                    
+                    ; Row 2: Automerge
+                    btn := UIManager.CreateStyledButton(x, y, btnW, btnH, 
+                        State.automergeUnlocked ? "Automerge UNLOCKED" : "Automerge LOCKED", State.automergeUnlocked)
+                    UI.btnToggleAutomerge := btn
+                    UI.sectionContents["refining.parameters.unlockables"].Push(btn)
+                    
+                    y += btnH + UI.rowGap
+                    
+                    ; Row 3: Auto Max Level
+                    btn := UIManager.CreateStyledButton(x, y, btnW, btnH, 
+                        State.autoMaxLevelUnlocked ? "Auto Max Lvl UNLOCKED" : "Auto Max Lvl LOCKED", State.autoMaxLevelUnlocked)
+                    UI.btnToggleAutoMaxLevel := btn
+                    UI.sectionContents["refining.parameters.unlockables"].Push(btn)
+                    
+                    y += btnH + UI.rowGap
+                    
+                    ; Row 4: Auto Weapon Polish
+                    btn := UIManager.CreateStyledButton(x, y, btnW, btnH, 
+                        State.autoWeaponPolishUnlocked ? "Auto Wpn Polish UNLOCKED" : "Auto Wpn Polish LOCKED", State.autoWeaponPolishUnlocked)
+                    UI.btnToggleAutoWeaponPolish := btn
+                    UI.sectionContents["refining.parameters.unlockables"].Push(btn)
+                    
+                    y += btnH + UI.sectionGap
+                }
+                
+                ; Variables
+                UIManager.CreateSubSectionHeader("refining.parameters.variables", y, UI.hudW, "Variables", 48)
+                y += 28 + UI.rowGap
+                
+                if State.sectionStates["refining.parameters.variables"] {
+                    ; Centered variable inputs with full labels
+                    lblW := 340  ; Variables label width (no indentation needed)
+                    edtW := 80   ; Width for 5 characters
+                    customGap := 20  ; Custom gap between label and textbox
+                    totalW := lblW + edtW + Constants.UI_INPUT_GAP
+                    x := (UI.hudW - totalW) // 2  ; Center without indentation
+                    
+                    ; Highest mineral level input
+                    lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y+4, lblW), "Highest mineral level:")
+                    UI.lblMineralLevel := lbl
+                    UI.sectionContents["refining.parameters.variables"].Push(lbl)
+                    
+                    edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + customGap, y, edtW), State.mineralLevel)
+                    edt.SetFont("s11 c000000", "Cascadia Mono")
+                    UI.inputMineralLevel := edt
+                    UI.sectionContents["refining.parameters.variables"].Push(edt)
+                    
+                    y += Constants.UI_INPUT_HEIGHT + UI.rowGap
+                    
+                    ; Merge wait time input
+                    lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y+4, lblW), "Merge wait time (ms):")
+                    UI.lblMergeWait := lbl
+                    UI.sectionContents["refining.parameters.variables"].Push(lbl)
+                    
+                    edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + customGap, y, edtW), State.mergeWaitTime)
+                    edt.SetFont("s11 c000000", "Cascadia Mono")
+                    UI.inputMergeWait := edt
+                    UI.sectionContents["refining.parameters.variables"].Push(edt)
+                    
+                    y += Constants.UI_INPUT_HEIGHT + UI.rowGap
+                    
+                    ; Exploit wait time input
+                    lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y+4, lblW), "Exploit wait time (ms):")
+                    UI.lblExploitWait := lbl
+                    UI.sectionContents["refining.parameters.variables"].Push(lbl)
+                    
+                    edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + customGap, y, edtW), State.exploitWaitTime)
+                    edt.SetFont("s11 c000000", "Cascadia Mono")
+                    UI.inputExploitWait := edt
+                    UI.sectionContents["refining.parameters.variables"].Push(edt)
+                    
+                    y += Constants.UI_INPUT_HEIGHT + UI.rowGap
+                    
+                    y += UI.rowGap  ; Reduced spacing between subsections
+                }
+            }
         }
         
-        ; GAME STATE SECTION
-        UIManager.CreateSectionHeader("gamestate", y, UI.hudW, "Game State")
-        y += 32
+        ; Close refining section border  
+        y += UIManager.CloseSectionBorder("refining")
         
-        if State.sectionStates["gamestate"] {
-            ; Row 1: Early, Mid, Late, Custom
-            btnW := 95  ; Game state button width
-            totalW := (btnW * 4) + (gap * 3)
-            x := (UI.hudW - totalW) // 2
+        ; ═══ SECTION 2: UNITY HELPER ═══
+        sectionH := UIManager.CreateBigSectionHeader("unity", y, UI.hudW, "UNITY HELPER")
+        y += sectionH + UI.rowGap
+        
+        if State.sectionStates["unity"] {
+            ; ┌─ MACROS SUBSECTION ─┐
+            UIManager.CreateSubSectionHeader("unity.macros", y, UI.hudW, "Macro Selection", 24)
+            y += 28 + UI.rowGap
             
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Early", false)
-            UI.btnStateEarly := btn
-            UI.sectionContents["gamestate"].Push(btn)
+            if State.sectionStates["unity.macros"] {
+                ; Auto Unity button (first, centered)
+                btnW := Constants.UI_BTN_LARGE
+                x := (UI.hudW - btnW) // 2  ; Center without indentation
+                
+                btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Auto Unity", false)
+                UI.btnMacroAutoUnity := btn
+                UI.sectionContents["unity.macros"].Push(btn)
+                
+                y += btnH + UI.rowGap
+                
+                ; Zodiac Redistribution (second line, full width)
+                btnW := Constants.UI_BTN_FULL + 50  ; Use extra wide button for long text
+                x := (UI.hudW - btnW) // 2  ; Center without indentation to maximize width
+                
+                btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Zodiac Redistribution", false)
+                UI.btnMacroZodiacRedistribution := btn
+                UI.sectionContents["unity.macros"].Push(btn)
+                
+                y += btnH + UI.sectionGap
+            }
             
-            x += btnW + gap
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Mid", false)
-            UI.btnStateMid := btn
-            UI.sectionContents["gamestate"].Push(btn)
+            ; ┌─ PARAMETERS SUBSECTION ─┐
+            UIManager.CreateSubSectionHeader("unity.parameters", y, UI.hudW, "Parameters", 24)
+            y += 28 + UI.rowGap
             
-            x += btnW + gap
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Late", false)
-            UI.btnStateLate := btn
-            UI.sectionContents["gamestate"].Push(btn)
-            
-            x += btnW + gap
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Custom", false)
-            UI.btnStateCustom := btn
-            UI.sectionContents["gamestate"].Push(btn)
-            
-            y += btnH + gap
-            
-            ; Custom spawn input (centered with more space for label)
-            lblW := 170  ; Custom input label width
-            edtW := 50   ; Width for 2-3 characters
-            totalW := lblW + edtW + 15
-            x := (UI.hudW - totalW) // 2
-            
-            lbl := UI.gui.AddText(Format("x{} y{} w{} h32", x, y+3, lblW), "Spawn reps:")
-            UI.sectionContents["gamestate"].Push(lbl)
-            
-            edt := UI.gui.AddEdit(Format("x{} y{} w{} h32 Center +Border", x + lblW + 15, y, edtW), State.customSpawnReps)
-            edt.SetFont("s10 c000000", "Cascadia Mono")
-            UI.inputCustomSpawn := edt
-            UI.sectionContents["gamestate"].Push(edt)
-            
-            y += 36
-            
-            ; Custom polish input (centered with more space for label)
-            x := (UI.hudW - totalW) // 2
-            lbl := UI.gui.AddText(Format("x{} y{} w{} h32", x, y+3, lblW), "Polish reps:")
-            UI.sectionContents["gamestate"].Push(lbl)
-            
-            edt := UI.gui.AddEdit(Format("x{} y{} w{} h32 Center +Border", x + lblW + 15, y, edtW), State.customPolishReps)
-            edt.SetFont("s10 c000000", "Cascadia Mono")
-            UI.inputCustomPolish := edt
-            UI.sectionContents["gamestate"].Push(edt)
-            
-            y += 36 + pad
+            if State.sectionStates["unity.parameters"] {
+                ; Zodiac Selection
+                UIManager.CreateSubSectionHeader("unity.parameters.zodiac", y, UI.hudW, "Zodiac Selection", 48)
+                y += 28 + UI.rowGap
+                
+                if State.sectionStates["unity.parameters.zodiac"] {
+                    ; Section label
+                    lbl := UI.gui.AddText(Format("x{} y{} w{} h35 Center", pad, y, UI.hudW - 2*pad), "Select Zodiac Element:")
+                    lbl.SetFont("s11 cFFFFFF", "Cascadia Mono")
+                    UI.sectionContents["unity.parameters.zodiac"].Push(lbl)
+                    
+                    y += 35 + UI.rowGap  ; Account for full label height plus spacing
+                    
+                    ; Zodiac buttons in a 2x2 grid
+                    btnW := Constants.UI_BTN_LARGE
+                    btnH := UI.btnH
+                    zodiacGap := UI.gap
+                    startX := (UI.hudW - (2 * btnW + zodiacGap)) // 2  ; Center the button grid
+                    
+                    ; Earth Zodiac
+                    btn := UIManager.CreateStyledButton(startX, y, btnW, btnH, "Earth Zodiac", State.zodiacEarth)
+                    UI.btnZodiacEarth := btn
+                    UI.sectionContents["unity.parameters.zodiac"].Push(btn)
+                    
+                    ; Fire Zodiac  
+                    btn := UIManager.CreateStyledButton(startX + btnW + zodiacGap, y, btnW, btnH, "Fire Zodiac", State.zodiacFire)
+                    UI.btnZodiacFire := btn
+                    UI.sectionContents["unity.parameters.zodiac"].Push(btn)
+                    
+                    y += btnH + UI.rowGap
+                    
+                    ; Wind Zodiac
+                    btn := UIManager.CreateStyledButton(startX, y, btnW, btnH, "Wind Zodiac", State.zodiacWind)
+                    UI.btnZodiacWind := btn
+                    UI.sectionContents["unity.parameters.zodiac"].Push(btn)
+                    
+                    ; Water Zodiac
+                    btn := UIManager.CreateStyledButton(startX + btnW + zodiacGap, y, btnW, btnH, "Water Zodiac", State.zodiacWater)
+                    UI.btnZodiacWater := btn
+                    UI.sectionContents["unity.parameters.zodiac"].Push(btn)
+                    
+                    y += btnH + UI.sectionGap
+                }
+                
+                ; Time Warp Settings
+                UIManager.CreateSubSectionHeader("unity.parameters.timewarp", y, UI.hudW, "Variables", 48)
+                y += 28 + UI.rowGap
+                
+                if State.sectionStates["unity.parameters.timewarp"] {
+                    ; Configure label and input dimensions
+                    lblW := 360  ; Label width for complete text display
+                    edtW := 80
+                    customGap := 20  ; Custom gap between label and textbox
+                    totalW := lblW + edtW + Constants.UI_INPUT_GAP
+                    x := (UI.hudW - totalW) // 2  ; Center the input group
+                    
+                    ; Time warp wait time input
+                    lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y + Constants.UI_LABEL_OFFSET, lblW), "Time warp wait time (ms):")
+                    lbl.SetFont("s10 cFFFFFF", "Cascadia Mono")
+                    UI.lblTimeWarpWaitTime := lbl
+                    UI.sectionContents["unity.parameters.timewarp"].Push(lbl)
+                    
+                    edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + customGap, y, edtW), State.timeWarpWaitTime)
+                    edt.SetFont("s10 c000000", "Cascadia Mono")
+                    UI.inputTimeWarpWaitTime := edt
+                    UI.sectionContents["unity.parameters.timewarp"].Push(edt)
+                    
+                    y += Constants.UI_INPUT_HEIGHT + UI.rowGap
+                    
+                    ; Time warp reps input
+                    lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y + Constants.UI_LABEL_OFFSET, lblW), "Time warp reps:")
+                    lbl.SetFont("s10 cFFFFFF", "Cascadia Mono")
+                    UI.lblTimeWarpReps := lbl
+                    UI.sectionContents["unity.parameters.timewarp"].Push(lbl)
+                    
+                    edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + customGap, y, edtW), State.timeWarpReps)
+                    edt.SetFont("s10 c000000", "Cascadia Mono")
+                    UI.inputTimeWarpReps := edt
+                    UI.sectionContents["unity.parameters.timewarp"].Push(edt)
+                    
+                    y += Constants.UI_INPUT_HEIGHT + UI.rowGap
+                    
+                    ; Auto Unity max reps input
+                    lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y + Constants.UI_LABEL_OFFSET, lblW), "Auto Unity reps:")
+                    lbl.SetFont("s10 cFFFFFF", "Cascadia Mono")
+                    UI.lblAutoUnityMaxReps := lbl
+                    UI.sectionContents["unity.parameters.timewarp"].Push(lbl)
+                    
+                    edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + customGap, y, edtW), State.autoUnityMaxReps)
+                    edt.SetFont("s10 c000000", "Cascadia Mono")
+                    UI.inputAutoUnityMaxReps := edt
+                    UI.sectionContents["unity.parameters.timewarp"].Push(edt)
+                    
+                    y += Constants.UI_INPUT_HEIGHT + UI.rowGap
+                    
+                    ; Zodiac redistribution wait time input
+                    lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y + Constants.UI_LABEL_OFFSET, lblW), "Redistribution wait time (ms):")
+                    lbl.SetFont("s10 cFFFFFF", "Cascadia Mono")
+                    UI.lblZodiacRedistributionWait := lbl
+                    UI.sectionContents["unity.parameters.timewarp"].Push(lbl)
+                    
+                    edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + customGap, y, edtW), State.zodiacRedistributionWait)
+                    edt.SetFont("s10 c000000", "Cascadia Mono")
+                    UI.inputZodiacRedistributionWait := edt
+                    UI.sectionContents["unity.parameters.timewarp"].Push(edt)
+                    
+                    y += Constants.UI_INPUT_HEIGHT + UI.sectionGap
+                }
+            }
         }
         
-        ; FINE SETTINGS SECTION
-        UIManager.CreateSectionHeader("finesettings", y, UI.hudW, "Fine Settings")
-        y += 32
+        ; Close unity section border
+        y += UIManager.CloseSectionBorder("unity")
         
-        if State.sectionStates["finesettings"] {
-            ; All Fine Settings buttons
-            btnW := 200  ; Fine settings button width
-            totalW := (btnW * 2) + gap
-            x := (UI.hudW - totalW) // 2
+        ; ═══ SECTION 3: OTHER TOOLS ═══
+        sectionH := UIManager.CreateBigSectionHeader("other", y, UI.hudW, "OTHER TOOLS")
+        y += sectionH + UI.rowGap
+        
+        if State.sectionStates["other"] {
+            ; ┌─ MACROS SUBSECTION ─┐
+            UIManager.CreateSubSectionHeader("other.macros", y, UI.hudW, "Macro Selection", 24)
+            y += 28 + UI.rowGap
             
-            ; Row 1: Auto Refining, Auto RfT Upgrade
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, 
-                State.autoRefining ? "Auto Refining" : "No Refining", State.autoRefining)
-            UI.btnToggleRefining := btn
-            UI.sectionContents["finesettings"].Push(btn)
+            if State.sectionStates["other.macros"] {
+                ; Autoclicker (first, centered)
+                btnW := Constants.UI_BTN_XLARGE  
+                x := (UI.hudW - btnW) // 2  ; Center without indentation
+                
+                btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Autoclicker", false)
+                UI.btnMacroAutoClicker := btn
+                UI.sectionContents["other.macros"].Push(btn)
+                
+                y += btnH + UI.rowGap
+                
+                ; Time macros on second line
+                btnW := Constants.UI_BTN_LARGE  ; Base button width
+                totalW := (btnW + 20) + btnW + gap  ; Time Warp Burst is wider
+                x := (UI.hudW - totalW) // 2  ; Center without indentation
+                
+                btn := UIManager.CreateStyledButton(x, y, btnW + 20, btnH, "Time Warp Burst", false)
+                UI.btnMacroTimeWarp := btn
+                UI.sectionContents["other.macros"].Push(btn)
+                
+                x += (btnW + 20) + gap  ; Account for wider Time Warp button
+                btn := UIManager.CreateStyledButton(x, y, btnW, btnH, "Time Flux Buy", false)
+                UI.btnMacroTimeFluxBuy := btn
+                UI.sectionContents["other.macros"].Push(btn)
+                
+                y += btnH + UI.sectionGap
+            }
             
-            x += btnW + gap
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, 
-                State.autoRftUpgrade ? "Auto RfT Upg" : "No RfT Upg", State.autoRftUpgrade)
-            UI.btnToggleRftUpgrade := btn
-            UI.sectionContents["finesettings"].Push(btn)
+            ; ┌─ PARAMETERS SUBSECTION ─┐
+            UIManager.CreateSubSectionHeader("other.parameters", y, UI.hudW, "Parameters", 24)
+            y += 28 + UI.rowGap
             
-            y += btnH + gap
+            if State.sectionStates["other.parameters"] {
+                ; Time warp interval input (first)
+                lblW := 400  ; Reduced label space to 400px
+                edtW := 80   ; Textbox width (back to original)
+                customGap := 20   ; Minimal gap to eliminate empty space
+                totalW := lblW + edtW + customGap
+                x := (UI.hudW - totalW) // 2  ; Center without indentation
+                
+                lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y+4, lblW), "Time Warp // Burst Interval (ms):")
+                UI.lblTimewarp := lbl
+                UI.sectionContents["other.parameters"].Push(lbl)
+                
+                edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + customGap, y, edtW), State.timewarpInterval)
+                edt.SetFont("s11 c000000", "Cascadia Mono")
+                UI.inputTimewarp := edt
+                UI.sectionContents["other.parameters"].Push(edt)
+                
+                y += Constants.UI_INPUT_HEIGHT + UI.rowGap
+                
+                ; Time warp minutes to spend input
+                lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y+4, lblW), "Time Warp // Minutes to spend:")
+                UI.lblTimeWarpMinutesToSpend := lbl
+                UI.sectionContents["other.parameters"].Push(lbl)
+                
+                edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + customGap, y, edtW), State.timeWarpMinutesToSpend)
+                edt.SetFont("s11 c000000", "Cascadia Mono")
+                UI.inputTimeWarpMinutesToSpend := edt
+                UI.sectionContents["other.parameters"].Push(edt)
+                
+                y += Constants.UI_INPUT_HEIGHT + UI.rowGap
+                
+                ; Delay between actions input
+                lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y+4, lblW), "Delay between actions (ms):")
+                UI.lblMicroDelay := lbl
+                UI.sectionContents["other.parameters"].Push(lbl)
+                
+                edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + customGap, y, edtW), State.microDelayMs)
+                edt.SetFont("s11 c000000", "Cascadia Mono")
+                UI.inputMicroDelay := edt
+                UI.sectionContents["other.parameters"].Push(edt)
+                
+                y += Constants.UI_INPUT_HEIGHT + UI.sectionGap
+            }
             
-            ; Row 2: Weapon Polish Mode
-            btnW := 300  ; Time flux and unity button width
-            x := (UI.hudW - btnW) // 2
+            ; ┌─ COORDINATE SETTINGS SUBSECTION ─┐
+            UIManager.CreateSubSectionHeader("other.coordinates", y, UI.hudW, "Coordinate Settings", 24)
+            y += 28 + UI.rowGap
             
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, 
-                State.allWeaponsPolish ? "All Weapons Polish" : "Sword Polish Only", State.allWeaponsPolish)
-            UI.btnTogglePolishMode := btn
-            UI.sectionContents["finesettings"].Push(btn)
+            if State.sectionStates["other.coordinates"] {
+                ; Coordinate picker instructions
+                instrText := "Double-click a coordinate to set it. Click anywhere on screen when prompted."
+                lbl := UI.gui.AddText(Format("x{} y{} w{} h30", pad + 12, y, UI.hudW - 2*pad - 24), instrText)
+                lbl.SetFont("s9", "Cascadia Mono")
+                UI.sectionContents["other.coordinates"].Push(lbl)
+                y += 35 + UI.rowGap
+                
+                ; Create a scrollable ListView for coordinates
+                listW := UI.hudW - 2*pad - 24
+                listH := 300  ; Fixed height with automatic scrolling
+                x := pad + 12
+                
+                ; Create ListView with columns - keep it simple
+                lvCoords := UI.gui.AddListView(Format("x{} y{} w{} h{} -Multi Grid Lines", x, y, listW, listH), ["Coordinate", "X", "Y", "Description"])
+                lvCoords.SetFont("s9", "Cascadia Mono")  ; Same font as HUD
+                
+                ; Set basic colors - black background, white text
+                try {
+                    DllCall("SendMessage", "Ptr", lvCoords.Hwnd, "UInt", 0x1024, "Ptr", 0, "Ptr", 0xFFFFFF)  ; LVM_SETTEXTCOLOR - white text
+                    DllCall("SendMessage", "Ptr", lvCoords.Hwnd, "UInt", 0x1025, "Ptr", 0, "Ptr", 0x000000)  ; LVM_SETTEXTBKCOLOR - black background
+                    DllCall("SendMessage", "Ptr", lvCoords.Hwnd, "UInt", 0x1026, "Ptr", 0, "Ptr", 0x000000)  ; LVM_SETBKCOLOR - black background
+                    
+                    ; Apply dark theme to scrollbars only (most reliable)
+                    DllCall("UxTheme.dll\SetWindowTheme", "Ptr", lvCoords.Hwnd, "WStr", "DarkMode_Explorer", "Ptr", 0)
+                }
+                UI.sectionContents["other.coordinates"].Push(lvCoords)
+                
+                ; Set column widths
+                lvCoords.ModifyCol(1, 120)  ; Coordinate name
+                lvCoords.ModifyCol(2, 60)   ; X value
+                lvCoords.ModifyCol(3, 60)   ; Y value  
+                lvCoords.ModifyCol(4, listW - 240)  ; Description
+                
+                ; Populate ListView with all coordinates
+                coordDescriptions := Map(
+                    "spawn", "Mineral spawn button",
+                    "spawnLevel", "Spawn level input",
+                    "maxLevel", "Max level button",
+                    "autospawn", "Autospawn toggle",
+                    "polishOpen", "Open polish menu",
+                    "polishPrestige", "Polish prestige button",
+                    "polishPrestigeConfirm", "Confirm polish prestige",
+                    "polishLevelUp", "Polish level up",
+                    "polishClose", "Close polish menu",
+                    "sword", "Sword weapon",
+                    "axe", "Axe weapon",
+                    "spear", "Spear weapon", 
+                    "bow", "Bow weapon",
+                    "knuckle", "Knuckle weapon",
+                    "refineOpen", "Open refine menu",
+                    "refinePrestige", "Refine prestige button",
+                    "refinePrestigeConfirm", "Confirm refine prestige",
+                    "refineClose", "Close refine menu",
+                    "timeFluxTab", "Time flux tab",
+                    "attacksTab", "Attacks tab",
+                    "shopTab", "Shop tab",
+                    "automationTab", "Automation tab",
+                    "unityTab", "Unity tab",
+                    "automerge", "Automerge toggle",
+                    "timewarpStart", "Start time warp",
+                    "timewarpStop", "Stop time warp",
+                    "timeWarpMinutesSpend", "Time warp minutes to spend",
+                    "buyTimeFlux", "Buy time flux",
+                    "purchaseConfirm", "Confirm purchase",
+                    "unite", "Unite button",
+                    "uniteConfirm1", "Unite confirmation 1",
+                    "uniteConfirm2", "Unite confirmation 2",
+                    "zodiacWater", "Water zodiac element",
+                    "zodiacWind", "Wind zodiac element",
+                    "zodiacEarth", "Earth zodiac element",
+                    "zodiacFire", "Fire zodiac element",
+                    "redistributionTopBox", "Redistribution top box",
+                    "redistributionBottomBox", "Redistribution bottom box",
+                    "redistribute", "Redistribute button",
+                    "emptySpace", "Empty space for exploit"
+                )
+                
+                ; Add coordinates to ListView organized by category
+                coordCategories := [
+                    ; Mineral Management
+                    ["spawn", "spawnLevel", "maxLevel", "autospawn"],
+                    
+                    ; Weapon Selection
+                    ["sword", "axe", "spear", "bow", "knuckle"],
+                    
+                    ; Polish Menu
+                    ["polishOpen", "polishPrestige", "polishPrestigeConfirm", "polishLevelUp", "polishClose"],
+                    
+                    ; Refining Menu  
+                    ["refineOpen", "refinePrestige", "refinePrestigeConfirm", "refineClose"],
+                    
+                    ; Unity System
+                    ["unite", "uniteConfirm1", "uniteConfirm2"],
+                    
+                    ; Zodiac Elements
+                    ["zodiacWater", "zodiacWind", "zodiacEarth", "zodiacFire"],
+                    
+                    ; Zodiac Redistribution
+                    ["redistributionTopBox", "redistributionBottomBox", "redistribute"],
+                    
+                    ; Game Tabs
+                    ["timeFluxTab", "attacksTab", "shopTab", "automationTab", "unityTab"],
+                    
+                    ; Time Control
+                    ["timewarpStart", "timewarpStop"],
+                    
+                    ; Shop Actions
+                    ["buyTimeFlux", "purchaseConfirm"],
+                    
+                    ; Automation
+                    ["automerge"],
+                    
+                    ; Special Actions
+                    ["emptySpace"]
+                ]
+                
+                ; Add coordinates in category order
+                for category in coordCategories {
+                    for coordName in category {
+                        if State.coords.Has(coordName) {
+                            coords := State.coords[coordName]
+                            desc := coordDescriptions.Has(coordName) ? coordDescriptions[coordName] : "Game coordinate"
+                            lvCoords.Add(, coordName, coords[1], coords[2], desc)
+                        }
+                    }
+                }
+                
+                ; Handle double-click to start coordinate picking
+                lvCoords.OnEvent("DoubleClick", (*) => CoordinatePicker.HandleListViewDoubleClick(lvCoords))
+                
+                ; Store ListView reference for updates
+                UI.coordListView := lvCoords
+                
+                y += listH + UI.sectionGap
+            }
             
-            y += btnH + pad
+            ; ┌─ INFO SUBSECTION ─┐
+            UIManager.CreateSubSectionHeader("other.info", y, UI.hudW, "Information && Hotkeys", 24)
+            y += 28 + UI.rowGap
+            
+            if State.sectionStates["other.info"] {
+                ; Hotkey information text (indented)
+                infoText := "F5: Start/Stop`n"
+                          . "F6: Cycle Macros`n"
+                          . "F7: Cycle Game States`n"
+                          . "F8: Toggle All Fine Settings`n"
+                          . "F9: Toggle All Unlockables`n"
+                          . "F10: Compact Mode`n"
+                          . "Esc: Exit"
+                
+                lbl := UI.gui.AddText(Format("x{} y{} w{} h200", pad + 12, y, UI.hudW - 2*pad - 24), infoText)
+                lbl.SetFont("s10", "Cascadia Mono")
+                UI.lblInfo := lbl
+                UI.sectionContents["other.info"].Push(lbl)
+                
+                y += 200 + UI.gap
+                
+                ; Credit line - right aligned (indented)
+                creditLbl := UI.gui.AddText(Format("x{} y{} w{} h35 Right", pad + 12, y, UI.hudW - 2*pad - 24), "Script by GullibleMonkey")
+                creditLbl.SetFont("s10", "Cascadia Mono")
+                UI.sectionContents["other.info"].Push(creditLbl)
+                
+                y += UI.sectionGap
+            }
+            
+            y += UI.sectionGap  ; Space after info subsection
         }
         
-        ; AUTOMATION UNLOCKABLES SECTION
-        UIManager.CreateSectionHeader("unlockables", y, UI.hudW, "Automation Unlockables")
-        y += 32
+        ; Close other section border
+        y += UIManager.CloseSectionBorder("other")
         
-        if State.sectionStates["unlockables"] {
-            ; Each button on its own line for full width
-            btnW := 320  ; Unlockables button width
-            x := (UI.hudW - btnW) // 2
-            
-            ; Row 1: Autospawn
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, 
-                State.autospawnUnlocked ? "Autospawn UNLOCKED" : "Autospawn LOCKED", State.autospawnUnlocked)
-            UI.btnToggleAutospawn := btn
-            UI.sectionContents["unlockables"].Push(btn)
-            
-            y += btnH + gap
-            
-            ; Row 2: Automerge
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, 
-                State.automergeUnlocked ? "Automerge UNLOCKED" : "Automerge LOCKED", State.automergeUnlocked)
-            UI.btnToggleAutomerge := btn
-            UI.sectionContents["unlockables"].Push(btn)
-            
-            y += btnH + gap
-            
-            ; Row 3: Auto Max Level
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, 
-                State.autoMaxLevelUnlocked ? "Auto Max Lvl UNLOCKED" : "Auto Max Lvl LOCKED", State.autoMaxLevelUnlocked)
-            UI.btnToggleAutoMaxLevel := btn
-            UI.sectionContents["unlockables"].Push(btn)
-            
-            y += btnH + gap
-            
-            ; Row 4: Auto Weapon Polish
-            btn := UIManager.CreateStyledButton(x, y, btnW, btnH, 
-                State.autoWeaponPolishUnlocked ? "Auto Wpn Polish UNLOCKED" : "Auto Wpn Polish LOCKED", State.autoWeaponPolishUnlocked)
-            UI.btnToggleAutoWeaponPolish := btn
-            UI.sectionContents["unlockables"].Push(btn)
-            
-            y += btnH + pad
-        }
-        
-        ; VARIABLES SECTION
-        UIManager.CreateSectionHeader("variables", y, UI.hudW, "Variables")
-        y += 32
-        
-        if State.sectionStates["variables"] {
-            ; Centered variable inputs with full labels
-            lblW := 340  ; Variables label width
-            edtW := 80   ; Width for 5 characters
-            totalW := lblW + edtW + 15
-            x := (UI.hudW - totalW) // 2
-            
-            ; Highest mineral level input
-            lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y+4, lblW), "Highest mineral level:")
-            UI.lblMineralLevel := lbl
-            UI.sectionContents["variables"].Push(lbl)
-            
-            edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + 15, y, edtW), State.mineralLevel)
-            edt.SetFont("s11 c000000", "Cascadia Mono")
-            UI.inputMineralLevel := edt
-            UI.sectionContents["variables"].Push(edt)
-            
-            y += 38
-            
-            ; Merge wait time input
-            lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y+4, lblW), "Merge wait time (ms):")
-            UI.lblMergeWait := lbl
-            UI.sectionContents["variables"].Push(lbl)
-            
-            edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + 15, y, edtW), State.mergeWaitTime)
-            edt.SetFont("s11 c000000", "Cascadia Mono")
-            UI.inputMergeWait := edt
-            UI.sectionContents["variables"].Push(edt)
-            
-            y += 38
-            
-            ; Time warp interval input
-            lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y+4, lblW), "Time warp interval (ms):")
-            UI.lblTimewarp := lbl
-            UI.sectionContents["variables"].Push(lbl)
-            
-            edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + 15, y, edtW), State.timewarpInterval)
-            edt.SetFont("s11 c000000", "Cascadia Mono")
-            UI.inputTimewarp := edt
-            UI.sectionContents["variables"].Push(edt)
-            
-            y += 38
-            
-            ; Exploit wait time input
-            lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y+4, lblW), "Exploit wait time (ms):")
-            UI.lblExploitWait := lbl
-            UI.sectionContents["variables"].Push(lbl)
-            
-            edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + 15, y, edtW), State.exploitWaitTime)
-            edt.SetFont("s11 c000000", "Cascadia Mono")
-            UI.inputExploitWait := edt
-            UI.sectionContents["variables"].Push(edt)
-            
-            y += 38
-            
-            ; Delay between actions input
-            lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y+4, lblW), "Delay between actions (ms):")
-            UI.lblMicroDelay := lbl
-            UI.sectionContents["variables"].Push(lbl)
-            
-            edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + 15, y, edtW), State.microDelayMs)
-            edt.SetFont("s11 c000000", "Cascadia Mono")
-            UI.inputMicroDelay := edt
-            UI.sectionContents["variables"].Push(edt)
-            
-            y += 38 + pad
-        }
-        
-        ; UNITY PARAMETERS SECTION
-        UIManager.CreateSectionHeader("unityparameters", y, UI.hudW, "Unity Parameters")
-        y += 32
-        
-        if State.sectionStates["unityparameters"] {
-            ; Section label - centered
-            lbl := UI.gui.AddText(Format("x{} y{} w{} h25 Center", pad, y, UI.hudW - 2*pad), "Select Zodiac Element:")
-            lbl.SetFont("s11 cFFFFFF", "Cascadia Mono")
-            UI.sectionContents["unityparameters"].Push(lbl)
-            
-            y += 30
-            
-            ; Zodiac buttons in a 2x2 grid
-            btnW := 180  ; Button width for zodiac elements
-            btnH := 34   ; Standard button height
-            gap := 15
-            startX := (UI.hudW - (2 * btnW + gap)) // 2
-            
-            ; Earth Zodiac
-            btn := UIManager.CreateStyledButton(startX, y, btnW, btnH, "Earth Zodiac", State.zodiacEarth)
-            UI.btnZodiacEarth := btn
-            UI.sectionContents["unityparameters"].Push(btn)
-            
-            ; Fire Zodiac  
-            btn := UIManager.CreateStyledButton(startX + btnW + gap, y, btnW, btnH, "Fire Zodiac", State.zodiacFire)
-            UI.btnZodiacFire := btn
-            UI.sectionContents["unityparameters"].Push(btn)
-            
-            y += btnH + 15
-            
-            ; Wind Zodiac
-            btn := UIManager.CreateStyledButton(startX, y, btnW, btnH, "Wind Zodiac", State.zodiacWind)
-            UI.btnZodiacWind := btn
-            UI.sectionContents["unityparameters"].Push(btn)
-            
-            ; Water Zodiac
-            btn := UIManager.CreateStyledButton(startX + btnW + gap, y, btnW, btnH, "Water Zodiac", State.zodiacWater)
-            UI.btnZodiacWater := btn
-            UI.sectionContents["unityparameters"].Push(btn)
-            
-            y += btnH + pad
-        }
-        
-        ; STATISTICS SECTION
-        UIManager.CreateSectionHeader("statistics", y, UI.hudW, "Game Statistics")
-        y += 32
-        
-        if State.sectionStates["statistics"] {
-            ; Preview image for screenshots
-            previewW := UI.hudW - 2*pad
-            rect := State.captureRect
-            previewH := Max(20, Round(previewW * rect.h / Max(rect.w, 1)))
-            pic := UI.gui.AddPicture(Format("x{} y{} w{} h{} +Border", pad, y, previewW, previewH), "")
-            UI.imgPreview := pic
-            UI.sectionContents["statistics"].Push(pic)
-            
-            y += previewH + gap
-            
-            ; Cycle count display
-            lbl := UI.gui.AddText(Format("x{} y{} w{} h25", pad, y, UI.hudW - 2*pad), "Cycles: 0")
-            lbl.SetFont("s10", "Cascadia Mono")
-            UI.lblStatistics := lbl
-            UI.sectionContents["statistics"].Push(lbl)
-            
-            y += 25
-            
-            ; Average cycle time display
-            lbl := UI.gui.AddText(Format("x{} y{} w{} h25", pad, y, UI.hudW - 2*pad), 
-                                         "Avg cycle: --:--:--:-")
-            lbl.SetFont("s10", "Cascadia Mono")
-            UI.lblCycleTime := lbl
-            UI.sectionContents["statistics"].Push(lbl)
-            
-            y += 25 + pad
-        }
-        
-        ; INFO SECTION
-        UIManager.CreateSectionHeader("info", y, UI.hudW, "Info")
-        y += 32
-        
-        if State.sectionStates["info"] {
-            ; Hotkey information text
-            infoText := "F5: Start/Stop`n"
-                      . "F6: Cycle Macros`n"
-                      . "F7: Cycle Game States`n"
-                      . "F8: Toggle All Fine Settings`n"
-                      . "F9: Toggle All Unlockables`n"
-                      . "F10: Compact Mode`n"
-                      . "Esc: Exit"
-            
-            lbl := UI.gui.AddText(Format("x{} y{} w{} h200", pad, y, UI.hudW - 2*pad), infoText)
-            lbl.SetFont("s10", "Cascadia Mono")
-            UI.lblInfo := lbl
-            UI.sectionContents["info"].Push(lbl)
-            
-            y += 200 + 10
-            
-            ; Credit line - right aligned
-            creditLbl := UI.gui.AddText(Format("x{} y{} w{} h25 Right", pad, y, UI.hudW - 2*pad), "Script by GullibleMonkey")
-            creditLbl.SetFont("s10", "Cascadia Mono")
-            UI.sectionContents["info"].Push(creditLbl)
-            
-            y += 25 + pad
-        }
-        
-        ; Show window at saved position with extra margin
+        ; Show window at saved position with total height
         totalH := y + 10  ; Minimal bottom margin
         ini := Config.CONFIG_FILE
-        hx := IniRead(ini, "UI", "X", 100)
-        hy := IniRead(ini, "UI", "Y", 100)
+        hx := IniRead(ini, "UI", "X", 12)
+        hy := IniRead(ini, "UI", "Y", 51)
         UI.gui.Show(Format("x{} y{} w{} h{} NoActivate", hx, hy, UI.hudW, totalH))
     }
     
@@ -1705,10 +2463,73 @@ class UIManager {
         UI.sectionHeaders[section] := header
     }
     
+    ; Create a clean big section header with visual separation
+    static CreateBigSectionHeader(section, y, hudW, title) {
+        ; Check if section exists in state, initialize if not
+        if !State.sectionStates.Has(section)
+            State.sectionStates[section] := true
+            
+        ; Add arrow indicator based on state
+        arrow := State.sectionStates[section] ? "▼" : "►"
+        
+        ; Create the main section header with color coding  
+        fullTitle := arrow . " " . title
+        header := UI.gui.AddText(Format("x8 y{} w{} h30 Center", y, hudW - 16), fullTitle)
+        
+        ; Color code by section
+        if (section = "refining") {
+            header.SetFont("s12 Bold cFF4444", "Cascadia Mono")  ; Red for Minerals
+        } else if (section = "unity") {
+            header.SetFont("s12 Bold c4444FF", "Cascadia Mono")  ; Blue for Unity  
+        } else if (section = "other") {
+            header.SetFont("s12 Bold c44FF44", "Cascadia Mono")  ; Green for Other Tools
+        } else {
+            header.SetFont("s12 Bold cFFFFFF", "Cascadia Mono")  ; Default white
+        }
+        UI.sectionHeaders[section] := header
+        
+        return 30  ; Return height for spacing calculations
+    }
+    
+    ; Create a clean sub-section header with visual hierarchy
+    static CreateSubSectionHeader(section, y, hudW, title, indent := 24) {
+        ; Check if section exists in state, initialize if not
+        if !State.sectionStates.Has(section)
+            State.sectionStates[section] := true
+            
+        ; Add arrow indicator based on state  
+        arrow := State.sectionStates[section] ? "▼" : "►"
+        fullTitle := "• " . arrow . " " . title
+        
+        ; Create clickable header with proper indentation and color coding
+        header := UI.gui.AddText(Format("x{} y{} w{} h28 Left", indent, y, hudW - indent - 8), fullTitle)
+        
+        ; Color code by parent section
+        if (InStr(section, "refining")) {
+            header.SetFont("s10 Bold cFFAAAA", "Cascadia Mono")  ; Light red for Minerals subsections
+        } else if (InStr(section, "unity")) {
+            header.SetFont("s10 Bold cAAAAFF", "Cascadia Mono")  ; Light blue for Unity subsections  
+        } else if (InStr(section, "other")) {
+            header.SetFont("s10 Bold cAAFFAA", "Cascadia Mono")  ; Light green for Other Tools subsections
+        } else {
+            header.SetFont("s10 Bold c00CCFF", "Cascadia Mono")  ; Default light blue
+        }
+        UI.sectionHeaders[section] := header
+        return 28  ; Return height for spacing calculations
+    }
+    
+    
+    
+    ; Add visual spacing for section completion
+    static CloseSectionBorder(section) {
+        ; Just return a small gap for section separation
+        return State.sectionStates.Has(section) && State.sectionStates[section] ? 15 : 5
+    }
+    
     ; Create compact mode GUI (small window with eye icon)
     static CreateCompactGUI() {
         ; Create small window with white background (square matching header height)
-        UI.compactGui := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale +Border")
+        UI.compactGui := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale ")
         UI.compactGui.BackColor := "FFFFFF"  ; White background
         UI.compactGui.MarginX := 0
         UI.compactGui.MarginY := 0
@@ -1840,6 +2661,9 @@ class UIManager {
         if UI.btnMacroAutoUnity && IsObject(UI.btnMacroAutoUnity) {
             try UI.btnMacroAutoUnity.OnEvent("Click", (*) => Controller.SelectMacro("autounity"))
         }
+        if UI.btnMacroZodiacRedistribution && IsObject(UI.btnMacroZodiacRedistribution) {
+            try UI.btnMacroZodiacRedistribution.OnEvent("Click", (*) => Controller.SelectMacro("zodiacredistribution"))
+        }
         
         ; Game state buttons
         if UI.btnStateEarly && IsObject(UI.btnStateEarly) {
@@ -1894,6 +2718,24 @@ class UIManager {
             try UI.btnZodiacWater.OnEvent("Click", (*) => Controller.ToggleZodiacWater())
         }
         
+        ; Unity Parameters input handlers
+        if UI.inputTimeWarpWaitTime && IsObject(UI.inputTimeWarpWaitTime) {
+            try UI.inputTimeWarpWaitTime.OnEvent("Change", (*) => Controller.UpdateTimeWarpWaitTime())
+            try UI.inputTimeWarpWaitTime.OnEvent("LoseFocus", (*) => Controller.ValidateTimeWarpWaitTime())
+        }
+        if UI.inputTimeWarpReps && IsObject(UI.inputTimeWarpReps) {
+            try UI.inputTimeWarpReps.OnEvent("Change", (*) => Controller.UpdateTimeWarpReps())
+            try UI.inputTimeWarpReps.OnEvent("LoseFocus", (*) => Controller.ValidateTimeWarpReps())
+        }
+        if UI.inputAutoUnityMaxReps && IsObject(UI.inputAutoUnityMaxReps) {
+            try UI.inputAutoUnityMaxReps.OnEvent("Change", (*) => Controller.UpdateAutoUnityMaxReps())
+            try UI.inputAutoUnityMaxReps.OnEvent("LoseFocus", (*) => Controller.ValidateAutoUnityMaxReps())
+        }
+        if UI.inputZodiacRedistributionWait && IsObject(UI.inputZodiacRedistributionWait) {
+            try UI.inputZodiacRedistributionWait.OnEvent("Change", (*) => Controller.UpdateZodiacRedistributionWait())
+            try UI.inputZodiacRedistributionWait.OnEvent("LoseFocus", (*) => Controller.ValidateZodiacRedistributionWait())
+        }
+        
         ; Input field change handlers
         if UI.inputMineralLevel && IsObject(UI.inputMineralLevel) {
             try UI.inputMineralLevel.OnEvent("Change", (*) => Controller.UpdateMineralLevel())
@@ -1910,6 +2752,10 @@ class UIManager {
         if UI.inputTimewarp && IsObject(UI.inputTimewarp) {
             try UI.inputTimewarp.OnEvent("Change", (*) => Controller.UpdateTimewarp())
             try UI.inputTimewarp.OnEvent("LoseFocus", (*) => Controller.ValidateTimewarp())
+        }
+        if UI.inputTimeWarpMinutesToSpend && IsObject(UI.inputTimeWarpMinutesToSpend) {
+            try UI.inputTimeWarpMinutesToSpend.OnEvent("Change", (*) => Controller.UpdateTimeWarpMinutesToSpend())
+            try UI.inputTimeWarpMinutesToSpend.OnEvent("LoseFocus", (*) => Controller.ValidateTimeWarpMinutesToSpend())
         }
         if UI.inputExploitWait && IsObject(UI.inputExploitWait) {
             try UI.inputExploitWait.OnEvent("Change", (*) => Controller.UpdateExploitWait())
@@ -1929,7 +2775,6 @@ class UIManager {
     static ToggleSection(section, *) {
         ; Update section state
         State.sectionStates[section] := !State.sectionStates[section]
-        ConfigManager.Save()
         
         ; Save current position
         x := 100
@@ -1943,6 +2788,9 @@ class UIManager {
             }
         }
         
+        ; Disable UI updates during recreation
+        SetTimer(() => UIManager.Update(), 0)
+        
         ; Destroy and recreate GUI
         if UI.gui && IsObject(UI.gui) {
             UI.gui.Destroy()
@@ -1952,12 +2800,16 @@ class UIManager {
         ; Reset all control references
         UI.sectionContents.Clear()
         UI.sectionHeaders.Clear()
+        UI.sectionBorders.Clear()
         UI.buttonStates.Clear()
         
         ; Recreate GUI with current layout
         UIManager.CreateGUI()
         UIManager.SetupEventHandlers()
         UIManager.UpdateVisuals()
+        
+        ; Re-enable UI updates
+        SetTimer(() => UIManager.Update(), Config.UI_UPDATE_INTERVAL)
         
         ; Restore position
         if UI.gui && IsObject(UI.gui) {
@@ -1970,13 +2822,22 @@ class UIManager {
         if !UI.gui || !IsObject(UI.gui)
             return
         
+        ; Check if update is needed and not too frequent
+        currentTime := A_TickCount
+        if !UI.needsUpdate && (currentTime - UI.lastUpdateTime) < UI.updateInterval
+            return
+        
+        ; Reset dirty flag and update timestamp
+        UI.needsUpdate := false
+        UI.lastUpdateTime := currentTime
+        
         ; Update start/stop button text and style
         on := State.isRunning || State.isStarting
-        newText := on ? "F5: Stop macro" : "F5: Start macro"
+        buttonText := on ? "F5: Stop macro" : "F5: Start macro"
         if UI.btnStartStop && IsObject(UI.btnStartStop) {
             try {
-                if UI.btnStartStop.Text != newText {
-                    UI.btnStartStop.Text := newText
+                if UI.btnStartStop.Text != buttonText {
+                    UI.btnStartStop.Text := buttonText
                     UIManager.UpdateButtonStyle(UI.btnStartStop, on)
                 }
             }
@@ -2095,6 +2956,8 @@ class UIManager {
             UIManager.UpdateButtonStyle(UI.btnMacroTimeFluxBuy, State.currentMacro = "timefluxbuy")
         if UI.btnMacroAutoUnity && IsObject(UI.btnMacroAutoUnity)
             UIManager.UpdateButtonStyle(UI.btnMacroAutoUnity, State.currentMacro = "autounity")
+        if UI.btnMacroZodiacRedistribution && IsObject(UI.btnMacroZodiacRedistribution)
+            UIManager.UpdateButtonStyle(UI.btnMacroZodiacRedistribution, State.currentMacro = "zodiacredistribution")
         
         ; Update game state buttons and inputs
         if UI.btnStateEarly && IsObject(UI.btnStateEarly)
@@ -2227,6 +3090,8 @@ class UIManager {
             inputs.Push(UI.inputMicroDelay)
         if UI.inputTimewarp && IsObject(UI.inputTimewarp)
             inputs.Push(UI.inputTimewarp)
+        if UI.inputTimeWarpMinutesToSpend && IsObject(UI.inputTimeWarpMinutesToSpend)
+            inputs.Push(UI.inputTimeWarpMinutesToSpend)
         if UI.inputCustomSpawn && IsObject(UI.inputCustomSpawn)
             inputs.Push(UI.inputCustomSpawn)
         if UI.inputCustomPolish && IsObject(UI.inputCustomPolish)
@@ -2245,6 +3110,175 @@ class UIManager {
         try {
             PostMessage 0xA1, 2, 0,, "ahk_id " UI.gui.Hwnd
         }
+    }
+}
+
+; ================================================================================
+; COORDINATE PICKER
+; ================================================================================
+
+class CoordinatePicker {
+    ; Static properties
+    static instrGui := ""
+    static currentListView := ""
+    static currentRowNum := 0
+    
+    ; Start picking a coordinate from ListView
+    static StartPickingWithListView(coordName, listView, rowNum) {
+        if State.isPickingCoordinate {
+            CoordinatePicker.StopPicking()
+        }
+        
+        State.isPickingCoordinate := true
+        State.currentCoordinateName := coordName
+        CoordinatePicker.currentListView := listView
+        CoordinatePicker.currentRowNum := rowNum
+        
+        ; Switch main HUD to compact mode and get its position
+        UIManager.ToggleCompact()  ; Switch to compact mode
+        UI.gui.GetPos(&guiX, &guiY, &guiW, &guiH)
+        
+        ; Create instruction GUI with white background
+        instrGui := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale +Border", "Coordinate Picker")
+        instrGui.BackColor := "FFFFFF"  ; White background for the entire GUI
+        instrGui.MarginX := 0
+        instrGui.MarginY := 0
+        instrGui.SetFont("s9 c000000", "Cascadia Mono")  ; Black text on white background
+        
+        ; Calculate dimensions for single line of text
+        headerH := 42   ; Same as HUD header height
+        headerW := 800  ; Extra wide for longer coordinate names
+        
+        ; Get compact HUD dimensions (eye icon size)
+        compactSize := 24  ; Compact HUD is just a 24px eye icon
+        
+        ; Position to the right of compact HUD, or left if right doesn't fit
+        rightX := guiX + compactSize + 25  ; 25px gap to the right of compact HUD (not full HUD)
+        leftX := guiX - headerW - 10  ; 10px gap to the left of compact HUD
+        
+        ; Check if right position fits on screen, otherwise use left
+        screenW := SysGet(16)  ; Get screen width to check positioning bounds
+        instrX := (rightX + headerW <= screenW) ? rightX : leftX
+        instrY := guiY - 1  ; 1px higher than HUD
+        
+        ; Create single instruction text
+        instrText := "Click anywhere to set " . coordName . " coordinate, Esc to cancel"
+        
+        ; Add centered instruction text
+        mainText := instrGui.AddText(Format("x8 y{} w{} h26 Center", (headerH - 26) // 2, headerW - 16), instrText)
+        mainText.SetFont("s9 Bold c000000", "Cascadia Mono")  ; Size 9, Bold, Black text
+        
+        ; Show instruction GUI
+        instrGui.Show(Format("x{} y{} w{} h{} NoActivate", instrX, instrY, headerW, headerH))
+        
+        ; Automatically activate Revolution Idle window
+        try {
+            WinActivate(Config.TARGET_PROCESS)
+        } catch {
+            ; If exact process name fails, try partial match
+            try {
+                WinActivate("Revolution Idle")
+            }
+        }
+        
+        ; Set up click capture hotkey
+        State.coordinatePickerHotkey := "LButton"
+        Hotkey("~LButton", CoordinatePicker.CaptureClick, "On")
+        
+        ; Store instruction GUI reference for cleanup
+        CoordinatePicker.instrGui := instrGui
+    }
+    
+    ; Handle ListView double-click event
+    static HandleListViewDoubleClick(listView) {
+        selectedRow := listView.GetNext()
+        if selectedRow > 0 {
+            coordName := listView.GetText(selectedRow, 1)
+            CoordinatePicker.StartPickingWithListView(coordName, listView, selectedRow)
+        }
+    }
+    
+    ; Legacy method for backward compatibility
+    static StartPicking(coordName) {
+        CoordinatePicker.StartPickingWithListView(coordName, UI.coordListView, 0)
+    }
+    
+    ; Capture the clicked coordinate
+    static CaptureClick(*) {
+        if !State.isPickingCoordinate
+            return
+            
+        ; Add small delay to avoid capturing the instruction GUI click
+        Sleep 100
+        
+        ; Get mouse position
+        MouseGetPos(&mouseX, &mouseY)
+        
+        ; Display coordinates to user
+        ToolTip("Captured: " . State.currentCoordinateName . " at (" . mouseX . ", " . mouseY . ")")
+        SetTimer(() => ToolTip(), -2000)  ; Clear after 2 seconds
+        
+        ; Update the coordinate in State.coords
+        State.coords[State.currentCoordinateName] := [mouseX, mouseY]
+        
+        ; Save to config file
+        ini := Config.CONFIG_FILE
+        IniWrite(mouseX, ini, "Coordinates", State.currentCoordinateName . "_X")
+        IniWrite(mouseY, ini, "Coordinates", State.currentCoordinateName . "_Y")
+        
+        ; Update ListView if we have a reference
+        if CoordinatePicker.currentListView {
+            try {
+                ; Find the row with this coordinate name and update it
+                rowCount := CoordinatePicker.currentListView.GetCount()
+                Loop rowCount {
+                    if CoordinatePicker.currentListView.GetText(A_Index, 1) = State.currentCoordinateName {
+                        ; Update columns 2 (X) and 3 (Y) with captured coordinates
+                        CoordinatePicker.currentListView.Modify(A_Index, , , mouseX, mouseY)
+                        break
+                    }
+                }
+            }
+        }
+        
+        ; Force close the instruction GUI immediately
+        if CoordinatePicker.instrGui {
+            try {
+                CoordinatePicker.instrGui.Destroy()  ; Use Destroy() instead of Close()
+            }
+            CoordinatePicker.instrGui := ""
+        }
+        
+        CoordinatePicker.StopPicking()
+    }
+    
+    ; Stop coordinate picking
+    static StopPicking(*) {
+        if !State.isPickingCoordinate
+            return
+            
+        State.isPickingCoordinate := false
+        State.currentCoordinateName := ""
+        CoordinatePicker.currentListView := ""
+        CoordinatePicker.currentRowNum := 0
+        
+        ; Clean up hotkeys
+        try {
+            Hotkey("~LButton", CoordinatePicker.CaptureClick, "Off")
+        }
+        
+        ; Close instruction GUI (if not already closed)
+        if CoordinatePicker.instrGui {
+            try {
+                CoordinatePicker.instrGui.Destroy()  ; Use Destroy() for complete cleanup
+            } catch {
+                ; GUI might already be destroyed
+            }
+            CoordinatePicker.instrGui := ""
+        }
+        
+        ; Restore HUD from compact mode back to full mode
+        UIManager.ToggleCompact()  ; Switch back to full mode
     }
 }
 
@@ -2294,6 +3328,15 @@ class Controller {
         State.isStopping := true
         State.isRunning := false
         State.isStarting := false
+        
+        ; Immediately restore window interactivity
+        try {
+            if UI.gui && IsObject(UI.gui) {
+                WinSetExStyle("-0x80020", "ahk_id " UI.gui.Hwnd)
+                WinSetTransparent("Off", "ahk_id " UI.gui.Hwnd)
+            }
+        }
+        
         UIManager.Update()
         SetTimer(() => Controller.WaitStop(), -10)
     }
@@ -2307,11 +3350,13 @@ class Controller {
         State.isStopping := false
         State.isStarting := false
         
-        ; Restore window properties
+        ; Restore window properties and interactivity
         try {
             if UI.gui && IsObject(UI.gui) {
-                WinSetExStyle("-0x80020", "ahk_id " UI.gui.Hwnd)
-                WinSetTransparent("Off", "ahk_id " UI.gui.Hwnd)
+                WinSetExStyle("-0x80020", "ahk_id " UI.gui.Hwnd)  ; Remove click-through
+                WinSetTransparent("Off", "ahk_id " UI.gui.Hwnd)   ; Remove transparency
+                ; Force window to be interactive
+                WinActivate("ahk_id " UI.gui.Hwnd)
             }
         }
         
@@ -2323,6 +3368,7 @@ class Controller {
         State.isRunning := true
         State.isLocked := true
         State.cycleCount := 0
+        State.autoUnityCount := 0  ; Reset Auto Unity counter
         State.startTime := A_TickCount
         
         UIManager.Update()
@@ -2343,6 +3389,12 @@ class Controller {
                     continue
                 }
                 
+                ; Check Auto Unity loop limit
+                if (State.currentMacro = "autounity" && State.autoUnityCount >= (IsNumber(State.autoUnityMaxReps) ? State.autoUnityMaxReps : 76)) {
+                    State.isRunning := false
+                    break
+                }
+                
                 ; Execute selected macro
                 switch State.currentMacro {
                     case "quick":
@@ -2359,6 +3411,9 @@ class Controller {
                         Macro.TimeFluxBuy()
                     case "autounity":
                         Macro.AutoUnity()
+                        State.autoUnityCount++
+                    case "zodiacredistribution":
+                        Macro.ZodiacRedistribution()
                     default:
                         Macro.Standard()
                 }
@@ -2379,15 +3434,14 @@ class Controller {
     ; Select a macro type
     static SelectMacro(macro) {
         State.currentMacro := macro
-        ConfigManager.Save()
+        UI.MarkDirty()
         UIManager.UpdateVisuals()
-        UIManager.Update()
         Util.FocusGame()
     }
     
     ; Cycle through macro types
     static CycleMacro() {
-        macros := ["standard", "quick", "long", "timewarp", "autoclicker", "endgame", "timefluxbuy", "autounity"]
+        macros := ["standard", "quick", "long", "timewarp", "autoclicker", "endgame", "timefluxbuy", "autounity", "zodiacredistribution"]
         currentIndex := 1
         for i, m in macros {
             if m = State.currentMacro {
@@ -2395,16 +3449,14 @@ class Controller {
                 break
             }
         }
-        nextIndex := currentIndex = 6 ? 1 : currentIndex + 1
+        nextIndex := currentIndex = Constants.MAX_MACRO_COUNT ? 1 : currentIndex + 1
         Controller.SelectMacro(macros[nextIndex])
     }
     
     ; Select game state
     static SelectGameState(gameState) {
         State.gameState := gameState
-        ConfigManager.Save()
         UIManager.UpdateVisuals()
-        UIManager.Update()
         Util.FocusGame()
     }
     
@@ -2445,7 +3497,6 @@ class Controller {
             UIManager.UpdateButtonStyle(UI.btnTogglePolishMode, State.allWeaponsPolish)
         }
         
-        ConfigManager.Save()
         Util.FocusGame()
     }
     
@@ -2478,7 +3529,6 @@ class Controller {
             UIManager.UpdateButtonStyle(UI.btnToggleAutoWeaponPolish, State.autoWeaponPolishUnlocked)
         }
         
-        ConfigManager.Save()
         Util.FocusGame()
     }
     
@@ -2488,7 +3538,6 @@ class Controller {
             newVal := UI.inputMineralLevel.Text
             if newVal != State.mineralLevel {
                 State.mineralLevel := newVal
-                ConfigManager.Save()
             }
         }
     }
@@ -2498,7 +3547,6 @@ class Controller {
             newVal := UI.inputMergeWait.Text
             if newVal != State.mergeWaitTime {
                 State.mergeWaitTime := newVal
-                ConfigManager.Save()
             }
         }
     }
@@ -2510,8 +3558,7 @@ class Controller {
                 numVal := newVal + 0
                 if numVal > 0 && numVal != State.microDelayMs {
                     State.microDelayMs := numVal
-                    ConfigManager.Save()
-                }
+                    }
             }
         }
     }
@@ -2521,7 +3568,15 @@ class Controller {
             newVal := UI.inputTimewarp.Text
             if newVal != State.timewarpInterval {
                 State.timewarpInterval := newVal
-                ConfigManager.Save()
+            }
+        }
+    }
+    
+    static UpdateTimeWarpMinutesToSpend() {
+        if UI.inputTimeWarpMinutesToSpend && IsObject(UI.inputTimeWarpMinutesToSpend) {
+            newVal := UI.inputTimeWarpMinutesToSpend.Text
+            if newVal != State.timeWarpMinutesToSpend {
+                State.timeWarpMinutesToSpend := newVal
             }
         }
     }
@@ -2531,7 +3586,6 @@ class Controller {
             newVal := UI.inputExploitWait.Text
             if newVal != State.exploitWaitTime {
                 State.exploitWaitTime := newVal
-                ConfigManager.Save()
             }
         }
     }
@@ -2554,7 +3608,6 @@ class Controller {
                     }
                 }
                 
-                ConfigManager.Save()
             }
         }
     }
@@ -2577,7 +3630,6 @@ class Controller {
                     }
                 }
                 
-                ConfigManager.Save()
             }
         }
     }
@@ -2588,7 +3640,6 @@ class Controller {
             if UI.inputMineralLevel.Text = "" || !RegExMatch(UI.inputMineralLevel.Text, "^\d+$") {
                 UI.inputMineralLevel.Text := "999"
                 State.mineralLevel := "999"
-                ConfigManager.Save()
             }
         }
     }
@@ -2596,9 +3647,8 @@ class Controller {
     static ValidateMergeWait() {
         if UI.inputMergeWait && IsObject(UI.inputMergeWait) {
             if UI.inputMergeWait.Text = "" || !RegExMatch(UI.inputMergeWait.Text, "^\d+$") {
-                UI.inputMergeWait.Text := "10000"
-                State.mergeWaitTime := "10000"
-                ConfigManager.Save()
+                UI.inputMergeWait.Text := "5000"
+                State.mergeWaitTime := "5000"
             }
         }
     }
@@ -2608,7 +3658,6 @@ class Controller {
             if UI.inputMicroDelay.Text = "" || !RegExMatch(UI.inputMicroDelay.Text, "^\d+$") {
                 UI.inputMicroDelay.Text := "25"
                 State.microDelayMs := 25
-                ConfigManager.Save()
             }
         }
     }
@@ -2616,9 +3665,17 @@ class Controller {
     static ValidateTimewarp() {
         if UI.inputTimewarp && IsObject(UI.inputTimewarp) {
             if UI.inputTimewarp.Text = "" || !RegExMatch(UI.inputTimewarp.Text, "^\d+$") {
-                UI.inputTimewarp.Text := "10000"
-                State.timewarpInterval := "10000"
-                ConfigManager.Save()
+                UI.inputTimewarp.Text := "1000"
+                State.timewarpInterval := "1000"
+            }
+        }
+    }
+    
+    static ValidateTimeWarpMinutesToSpend() {
+        if UI.inputTimeWarpMinutesToSpend && IsObject(UI.inputTimeWarpMinutesToSpend) {
+            if UI.inputTimeWarpMinutesToSpend.Text = "" || !RegExMatch(UI.inputTimeWarpMinutesToSpend.Text, "^\d+$") {
+                UI.inputTimeWarpMinutesToSpend.Text := "10"
+                State.timeWarpMinutesToSpend := "10"
             }
         }
     }
@@ -2626,9 +3683,8 @@ class Controller {
     static ValidateExploitWait() {
         if UI.inputExploitWait && IsObject(UI.inputExploitWait) {
             if UI.inputExploitWait.Text = "" || !RegExMatch(UI.inputExploitWait.Text, "^\d+$") {
-                UI.inputExploitWait.Text := "500"
-                State.exploitWaitTime := "500"
-                ConfigManager.Save()
+                UI.inputExploitWait.Text := "5000"
+                State.exploitWaitTime := "5000"
             }
         }
     }
@@ -2638,7 +3694,6 @@ class Controller {
             if UI.inputCustomSpawn.Text = "" || !RegExMatch(UI.inputCustomSpawn.Text, "^\d+$") {
                 UI.inputCustomSpawn.Text := "4"
                 State.customSpawnReps := "4"
-                ConfigManager.Save()
             }
         }
     }
@@ -2648,7 +3703,91 @@ class Controller {
             if UI.inputCustomPolish.Text = "" || !RegExMatch(UI.inputCustomPolish.Text, "^\d+$") {
                 UI.inputCustomPolish.Text := "1"
                 State.customPolishReps := "1"
-                ConfigManager.Save()
+            }
+        }
+    }
+    
+    ; Unity Parameters input functions
+    static UpdateTimeWarpWaitTime() {
+        if UI.inputTimeWarpWaitTime && IsObject(UI.inputTimeWarpWaitTime) {
+            newVal := UI.inputTimeWarpWaitTime.Text
+            if RegExMatch(newVal, "^\d+$") {
+                numVal := newVal + 0
+                if numVal > 0 && numVal != State.timeWarpWaitTime {
+                    State.timeWarpWaitTime := newVal
+                    }
+            }
+        }
+    }
+    
+    static ValidateTimeWarpWaitTime() {
+        if UI.inputTimeWarpWaitTime && IsObject(UI.inputTimeWarpWaitTime) {
+            if UI.inputTimeWarpWaitTime.Text = "" || !RegExMatch(UI.inputTimeWarpWaitTime.Text, "^\d+$") {
+                UI.inputTimeWarpWaitTime.Text := "5000"
+                State.timeWarpWaitTime := "5000"
+            }
+        }
+    }
+    
+    static UpdateTimeWarpReps() {
+        if UI.inputTimeWarpReps && IsObject(UI.inputTimeWarpReps) {
+            newVal := UI.inputTimeWarpReps.Text
+            if RegExMatch(newVal, "^\d+$") {
+                numVal := newVal + 0
+                if numVal > 0 && numVal != State.timeWarpReps {
+                    State.timeWarpReps := newVal
+                    }
+            }
+        }
+    }
+    
+    static ValidateTimeWarpReps() {
+        if UI.inputTimeWarpReps && IsObject(UI.inputTimeWarpReps) {
+            if UI.inputTimeWarpReps.Text = "" || !RegExMatch(UI.inputTimeWarpReps.Text, "^\d+$") {
+                UI.inputTimeWarpReps.Text := "1"
+                State.timeWarpReps := "1"
+            }
+        }
+    }
+    
+    static UpdateAutoUnityMaxReps() {
+        if UI.inputAutoUnityMaxReps && IsObject(UI.inputAutoUnityMaxReps) {
+            newVal := UI.inputAutoUnityMaxReps.Text
+            if RegExMatch(newVal, "^\d+$") {
+                numVal := newVal + 0
+                if numVal > 0 && numVal != State.autoUnityMaxReps {
+                    State.autoUnityMaxReps := newVal
+                }
+            }
+        }
+    }
+    
+    static ValidateAutoUnityMaxReps() {
+        if UI.inputAutoUnityMaxReps && IsObject(UI.inputAutoUnityMaxReps) {
+            if UI.inputAutoUnityMaxReps.Text = "" || !RegExMatch(UI.inputAutoUnityMaxReps.Text, "^\d+$") {
+                UI.inputAutoUnityMaxReps.Text := "24"
+                State.autoUnityMaxReps := "24"
+            }
+        }
+    }
+    
+    static UpdateZodiacRedistributionWait() {
+        if UI.inputZodiacRedistributionWait && IsObject(UI.inputZodiacRedistributionWait) {
+            newVal := UI.inputZodiacRedistributionWait.Text
+            if RegExMatch(newVal, "^\d+$") {
+                numVal := newVal + 0
+                if numVal > 0 && numVal != State.zodiacRedistributionWait {
+                    State.zodiacRedistributionWait := newVal
+                }
+            }
+        }
+    }
+    
+    static ValidateZodiacRedistributionWait() {
+        if UI.inputZodiacRedistributionWait && IsObject(UI.inputZodiacRedistributionWait) {
+            if UI.inputZodiacRedistributionWait.Text = "" || !RegExMatch(UI.inputZodiacRedistributionWait.Text, "^\d+$") {
+                UI.inputZodiacRedistributionWait.Text := "400"
+                State.zodiacRedistributionWait := "400"
             }
         }
     }
@@ -2660,7 +3799,6 @@ class Controller {
             UI.btnToggleRefining.Text := State.autoRefining ? "Auto Refining" : "No Refining"
             UIManager.UpdateButtonStyle(UI.btnToggleRefining, State.autoRefining)
         }
-        ConfigManager.Save()
         Util.FocusGame()
     }
     
@@ -2670,7 +3808,6 @@ class Controller {
             UI.btnToggleRftUpgrade.Text := State.autoRftUpgrade ? "Auto RfT Upg" : "No RfT Upg"
             UIManager.UpdateButtonStyle(UI.btnToggleRftUpgrade, State.autoRftUpgrade)
         }
-        ConfigManager.Save()
         Util.FocusGame()
     }
     
@@ -2680,7 +3817,6 @@ class Controller {
             UI.btnTogglePolishMode.Text := State.allWeaponsPolish ? "All Weapons Polish" : "Sword Polish Only"
             UIManager.UpdateButtonStyle(UI.btnTogglePolishMode, State.allWeaponsPolish)
         }
-        ConfigManager.Save()
         Util.FocusGame()
     }
     
@@ -2691,7 +3827,6 @@ class Controller {
             UI.btnToggleAutospawn.Text := State.autospawnUnlocked ? "Autospawn UNLOCKED" : "Autospawn LOCKED"
             UIManager.UpdateButtonStyle(UI.btnToggleAutospawn, State.autospawnUnlocked)
         }
-        ConfigManager.Save()
         Util.FocusGame()
     }
     
@@ -2701,7 +3836,6 @@ class Controller {
             UI.btnToggleAutomerge.Text := State.automergeUnlocked ? "Automerge UNLOCKED" : "Automerge LOCKED"
             UIManager.UpdateButtonStyle(UI.btnToggleAutomerge, State.automergeUnlocked)
         }
-        ConfigManager.Save()
         Util.FocusGame()
     }
     
@@ -2711,7 +3845,6 @@ class Controller {
             UI.btnToggleAutoMaxLevel.Text := State.autoMaxLevelUnlocked ? "Auto Max Lvl UNLOCKED" : "Auto Max Lvl LOCKED"
             UIManager.UpdateButtonStyle(UI.btnToggleAutoMaxLevel, State.autoMaxLevelUnlocked)
         }
-        ConfigManager.Save()
         Util.FocusGame()
     }
     
@@ -2721,7 +3854,6 @@ class Controller {
             UI.btnToggleAutoWeaponPolish.Text := State.autoWeaponPolishUnlocked ? "Auto Wpn Polish UNLOCKED" : "Auto Wpn Polish LOCKED"
             UIManager.UpdateButtonStyle(UI.btnToggleAutoWeaponPolish, State.autoWeaponPolishUnlocked)
         }
-        ConfigManager.Save()
         Util.FocusGame()
     }
     
@@ -2731,7 +3863,6 @@ class Controller {
         if UI.btnZodiacEarth && IsObject(UI.btnZodiacEarth) {
             UIManager.UpdateButtonStyle(UI.btnZodiacEarth, State.zodiacEarth)
         }
-        ConfigManager.Save()
         Util.FocusGame()
     }
     
@@ -2740,7 +3871,6 @@ class Controller {
         if UI.btnZodiacFire && IsObject(UI.btnZodiacFire) {
             UIManager.UpdateButtonStyle(UI.btnZodiacFire, State.zodiacFire)
         }
-        ConfigManager.Save()
         Util.FocusGame()
     }
     
@@ -2749,7 +3879,6 @@ class Controller {
         if UI.btnZodiacWind && IsObject(UI.btnZodiacWind) {
             UIManager.UpdateButtonStyle(UI.btnZodiacWind, State.zodiacWind)
         }
-        ConfigManager.Save()
         Util.FocusGame()
     }
     
@@ -2758,7 +3887,6 @@ class Controller {
         if UI.btnZodiacWater && IsObject(UI.btnZodiacWater) {
             UIManager.UpdateButtonStyle(UI.btnZodiacWater, State.zodiacWater)
         }
-        ConfigManager.Save()
         Util.FocusGame()
     }
 }
@@ -2788,16 +3916,25 @@ CleanupAndExit(ExitReason, ExitCode) {
 }
 
 ; ================================================================================
+; UTILITY FUNCTIONS
+; ================================================================================
+
+; Handle Escape key - cancel coordinate picking if active, otherwise exit app
+HandleEscapeKey() {
+    if State.isPickingCoordinate {
+        CoordinatePicker.StopPicking()
+    } else {
+        ExitApp()
+    }
+}
+
+; ================================================================================
 ; HOTKEYS
 ; ================================================================================
 
 $F5::Controller.ToggleStart()           ; Start/stop macro
-$F6::Controller.CycleMacro()            ; Cycle through macro types
-$F7::Controller.CycleGameState()        ; Cycle through game states
-$F8::Controller.ToggleAllFineSettings() ; Toggle all Fine Settings
-$F9::Controller.ToggleAllUnlockables()  ; Toggle all Automation Unlockables
 F10::UIManager.ToggleCompact()          ; Toggle compact mode
-$Esc::ExitApp                           ; Exit the script
+$Esc::HandleEscapeKey()                  ; Handle Esc key based on current state
 
 ; ================================================================================
 ; INITIALIZATION
