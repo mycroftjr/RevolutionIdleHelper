@@ -783,21 +783,18 @@ class Action {
     ; Extended spawn for a duration
     static ExtendedSpawn(duration) {
         startTime := A_TickCount
-        if (State.autospawnUnlocked) {
-            ; Auto mode: use autospawn toggle
-            while ((A_TickCount - startTime) < duration && State.isRunning) {
+        while ((A_TickCount - startTime) < duration && State.isRunning) {
+            if (State.autospawnUnlocked) {
+                ; Auto mode: use autospawn toggle
                 Action.Click("autospawn")
                 Action.LevelUpMineral()
                 Action.Click("autospawn")
-                Util.Sleep(State.microDelayMs)
-            }
-        } else {
-            ; Manual mode: click repeatedly
-            while ((A_TickCount - startTime) < duration && State.isRunning) {
+            } else {
+                ; Manual mode: click repeatedly
                 Action.LevelUpMineral()
                 Action.Click("spawn")
-                Util.Sleep(State.microDelayMs)
             }
+            Util.Sleep(State.microDelayMs)
         }
     }
     
@@ -3945,3 +3942,4 @@ Screenshot.InitGDI()
 ; ================================================================================
 ; END OF SCRIPT
 ; ================================================================================
+
