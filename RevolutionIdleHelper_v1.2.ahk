@@ -782,15 +782,19 @@ class Action {
     
     ; Extended spawn for a duration
     static ExtendedSpawn(duration) {
+        startTime := A_TickCount
         if (State.autospawnUnlocked) {
             ; Auto mode: use autospawn toggle
-            Action.Click("autospawn")
-            Util.Sleep(duration)
-            Action.Click("autospawn")
+            while ((A_TickCount - startTime) < duration && State.isRunning) {
+                Action.Click("autospawn")
+                Action.LevelUpMineral()
+                Action.Click("autospawn")
+                Util.Sleep(State.microDelayMs)
+            }
         } else {
             ; Manual mode: click repeatedly
-            startTime := A_TickCount
             while ((A_TickCount - startTime) < duration && State.isRunning) {
+                Action.LevelUpMineral()
                 Action.Click("spawn")
                 Util.Sleep(State.microDelayMs)
             }
@@ -1000,7 +1004,6 @@ class Sequence {
     ; Extended spawn sequence
     static ExtendedSpawn(duration) {
         Action.ExtendedSpawn(duration)
-        Action.LevelUpMineral()
     }
     
     ; Final merge sequence - also affected by game state
