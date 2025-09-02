@@ -1,6 +1,14 @@
-# Revolution Idle Helper
+# Revolution Idle Helper v1.2.1
 
 Advanced automation tool for the Revolution Idle game with comprehensive macro system and coordinate management.
+
+## What's New in v1.2.1
+
+- **⚡ Time Burst Functionality**: New automated Time Burst sequence that executes before refining
+- **🎮 Enhanced Game State Control**: Added Time Burst repetitions configuration (0-20)
+- **🔄 Improved Tab Navigation**: Proper autospawn (Unity) and automerge (Automation) tab handling
+- **🛡️ Enhanced Error Handling**: Better validation and graceful failure recovery
+- **🎯 Seamless Integration**: Works with Quick, Standard, and Long macros
 
 ## Table of Contents
 - [Overview](#overview)
@@ -29,6 +37,7 @@ Target audience: Revolution Idle players seeking to automate repetitive gameplay
 ## Features
 
 - **9 Pre-configured Macros**: Standard, Quick, Long, Endgame, Time Warp, Auto Clicker, Time Flux Buy, Auto Unity, Zodiac Redistribution
+- **⚡ Time Burst Integration**: Automated Time Burst sequence with configurable repetitions (0-20) before refining
 - **Visual Coordinate Picker**: Click-to-capture system with real-time coordinate updates
 - **Hierarchical Settings Organization**: Collapsible sections for Refining, Unity Parameters, and Other Tools
 - **Game State Management**: Early, Mid, Late, and Custom progression states with optimized parameters
@@ -293,7 +302,7 @@ This script uses screen coordinates and doesn't modify the game's code or read g
 - **Configure coordinates for your screen resolution**
 - Default coordinates may not work due to different screen/game resolutions
 
-**Setting up coordinates (Version 1.2):**
+**Setting up coordinates (Version 1.2.1):**
 1. Navigate to **Other Tools > Coordinate Settings**
 2. Double-click any coordinate in the list
 3. Click on the corresponding button/area in the game
@@ -334,6 +343,18 @@ Configure spawn and polish cycles based on your progression:
 
 - **Spawn Cycles**: Number of highest mineral spawns before polishing
 - **Polish Cycles**: Number of weapon polish rounds before final refining
+- **Time Burst Reps**: Number of Time Burst sequences to execute before refining (0-20)
+  - **0**: Disabled (default) - no Time Burst actions
+  - **1-20**: Executes Time Burst sequence the specified number of times
+
+**Time Burst Sequence Actions:**
+1. Set mineral level to highest (999)
+2. Navigate to Unity tab → activate autospawn (if unlocked)
+3. Navigate to Automation tab → activate automerge (if unlocked)
+4. Navigate to Time Flux tab → perform time warp burst
+5. Navigate back to Unity tab → deactivate autospawn
+6. Navigate back to Automation tab → deactivate automerge
+7. Return to Unity tab
 
 #### 4. Fine Settings
 
