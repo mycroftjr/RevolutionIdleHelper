@@ -1,5 +1,5 @@
 ; ================================================================================
-; REVOLUTION IDLE HELPER v1.2 - Revolution Idle Automation Script
+; REVOLUTION IDLE HELPER v1.2.1 - Revolution Idle Automation Script
 ; ================================================================================
 ; Description: Automation suite for Revolution Idle including minerals, unity, and utilities
 ; Author: GullibleMonkey
@@ -165,6 +165,7 @@ class State {
     ; Custom game state values
     static customSpawnReps := "4"    ; Custom spawn repetitions
     static customPolishReps := "1"   ; Custom polish repetitions
+    static timeBurstReps := "0"      ; Time burst repetitions before refining (default: 0 = disabled)
     static autoUnityMaxReps := "24"   ; Auto Unity maximum repetitions
     static zodiacRedistributionWait := "200"  ; Zodiac redistribution wait time (ms)
     
@@ -360,6 +361,7 @@ class UI {
     static btnStateCustom := 0
     static inputCustomSpawn := 0
     static inputCustomPolish := 0
+    static inputTimeBurstReps := 0
     
     ; Fine Settings buttons
     static btnToggleRefining := 0
@@ -494,6 +496,7 @@ class ConfigManager {
         ; Load custom game state values with validation
         State.customSpawnReps := Validator.ValidateString(IniRead(ini, "Settings", "CustomSpawnReps", "4"), 5, "4")
         State.customPolishReps := Validator.ValidateString(IniRead(ini, "Settings", "CustomPolishReps", "1"), 5, "1")
+        State.timeBurstReps := Validator.ValidateString(IniRead(ini, "Settings", "TimeBurstReps", "0"), 5, "0")
         
         ; Load delay setting with validation and backward compatibility
         State.microDelayMs := Validator.ValidateNumericRange(IniRead(ini, "Settings", "MicroDelayMs", 25) + 0, Constants.MIN_DELAY, Constants.MAX_DELAY, 25)
@@ -569,6 +572,7 @@ class ConfigManager {
         IniWrite State.exploitWaitTime, ini, "Settings", "ExploitWaitTime"
         IniWrite State.customSpawnReps, ini, "Settings", "CustomSpawnReps"
         IniWrite State.customPolishReps, ini, "Settings", "CustomPolishReps"
+        IniWrite State.timeBurstReps, ini, "Settings", "TimeBurstReps"
         
         ; Save Fine Settings
         IniWrite (State.autoRefining ? 1 : 0), ini, "FineSettings", "AutoRefining"
@@ -651,7 +655,7 @@ class ErrorHandler {
         ErrorHandler.LogError(source, error, context)
         State.SetSafeState(false)  ; Stop all operations
         if UI.gui && IsObject(UI.gui) {
-            try UI.gui.Title := "Revolution Idle Helper v1.2 - ERROR: " error.message
+            try UI.gui.Title := "Revolution Idle Helper v1.2.1 - ERROR: " error.message
         }
     }
 }
@@ -1040,6 +1044,174 @@ class Sequence {
             waitTime := 500
         return waitTime
     }
+    
+    ; Perform Time Burst action sequence
+    ; Sets mineral level to highest -> activates autospawn/automerge -> performs time burst -> deactivates autospawn/automerge -> returns to unity tab
+    static PerformTimeBurst() {
+        if !State.isRunning
+            return
+        
+        ; NOTE: Removed game window check as individual Action calls handle this
+        ; The IsGameBlocked() check was preventing Time Burst from running
+        ; Each Action.Click() and Action.Type() call has its own game window validation
+        
+        ; Set mineral level to highest
+        Action.SetMineralLevel("999")
+        if !State.isRunning
+            return
+        Util.Sleep(State.microDelayMs)
+        
+        ; Store initial autospawn/automerge states to restore later
+        autospawnWasActivated := false
+        automergeWasActivated := false
+        
+        ; Activate autospawn if available (toggle on) - autospawn is in the Unity tab
+        if State.autospawnUnlocked {
+            ; Navigate to Unity tab where autospawn is located
+            Action.Click("unityTab")
+            if !State.isRunning
+                return
+            Util.Sleep(Constants.TAB_TRANSITION_WAIT)
+            
+            ; Click autospawn to activate it
+            Action.Click("autospawn")
+            if !State.isRunning
+                return
+            autospawnWasActivated := true
+            Util.Sleep(State.microDelayMs)
+        }
+        
+        ; Activate automerge if available (toggle on) - automerge is on the automation tab
+        if State.automergeUnlocked {
+            ; Navigate to automation tab
+            Action.Click("automationTab")
+            if !State.isRunning
+                return
+            Util.Sleep(Constants.TAB_TRANSITION_WAIT)
+            
+            ; Click automerge to activate it
+            Action.Click("automerge")
+            if !State.isRunning
+                return
+            automergeWasActivated := true
+            Util.Sleep(State.microDelayMs)
+        }
+        
+        ; Perform Time Burst action (navigate to Time Flux tab)
+        Action.Click("timeFluxTab")
+        if !State.isRunning
+            return
+        Util.Sleep(Constants.TAB_TRANSITION_WAIT)
+        
+        ; Validate time warp minutes parameter
+        minutesToSpend := State.timeWarpMinutesToSpend = "" ? 1 : State.timeWarpMinutesToSpend
+        if minutesToSpend <= 0
+            minutesToSpend := 1
+        
+        ; Click on the minutes to spend field and enter the value
+        Action.Click("timeWarpMinutesSpend")
+        if !State.isRunning
+            return
+        Action.Type(minutesToSpend)
+        Util.Sleep(State.microDelayMs)
+        
+        ; Perform the Time Warp burst
+        if State.isRunning {
+            Action.Click("timewarpStart")
+            if !State.isRunning
+                return
+            
+            ; Wait for the specified interval (with safety bounds)
+            interval := Sequence.GetTimewarpInterval()
+            if interval < 100  ; Minimum 100ms safety
+                interval := 100
+            if interval > 30000  ; Maximum 30s safety
+                interval := 30000
+            Util.Sleep(interval)
+            
+            ; Stop time warp
+            if State.isRunning {
+                Action.Click("timewarpStop")
+                Util.Sleep(State.microDelayMs)
+            }
+        }
+        
+        ; Deactivate autospawn if it was activated (toggle off) 
+        ; Autospawn is in the Unity tab
+        if autospawnWasActivated && State.isRunning {
+            ; Navigate to Unity tab where autospawn is located
+            Action.Click("unityTab")
+            if !State.isRunning
+                return
+            Util.Sleep(Constants.TAB_TRANSITION_WAIT)
+            
+            ; Click autospawn to deactivate
+            Action.Click("autospawn")
+            Util.Sleep(State.microDelayMs)
+        }
+        
+        ; Deactivate automerge if it was activated (toggle off) - need to go to automation tab
+        if automergeWasActivated && State.isRunning {
+            ; Navigate to automation tab
+            Action.Click("automationTab")
+            if !State.isRunning
+                return
+            Util.Sleep(Constants.TAB_TRANSITION_WAIT)
+            
+            ; Click automerge to deactivate
+            Action.Click("automerge")
+            Util.Sleep(State.microDelayMs)
+        }
+        
+        ; Return to Unity tab (as specified in requirements)
+        if State.isRunning {
+            Action.Click("unityTab")
+            Util.Sleep(Constants.TAB_TRANSITION_WAIT)
+        }
+    }
+    
+    ; Execute Time Burst sequence multiple times before refining
+    static ExecuteTimeBurstSequence() {
+        ; Get number of Time Burst repetitions from settings with validation
+        timeBurstReps := State.timeBurstReps = "" ? 0 : (State.timeBurstReps + 0)
+        
+        ; Validate input - ensure it's a positive integer or 0
+        if timeBurstReps < 0 || !IsNumber(timeBurstReps) || timeBurstReps != Integer(timeBurstReps) {
+            ; Default to 0 for safety if invalid input
+            timeBurstReps := 0
+        }
+        
+        ; If 0 repetitions, skip Time Burst entirely (performance optimization)
+        if timeBurstReps <= 0
+            return
+        
+        ; Validate that required parameters are set before attempting Time Burst
+        if State.timeWarpMinutesToSpend = "" || State.timeWarpMinutesToSpend <= 0 {
+            ; Skip Time Burst if time warp minutes are not properly configured
+            return
+        }
+        
+        ; Perform Time Burst sequence the specified number of times
+        Loop timeBurstReps {
+            if !State.isRunning
+                return
+            
+            try {
+                Sequence.PerformTimeBurst()
+            } catch Error as e {
+                ; If Time Burst fails, continue with the next repetition or exit
+                ; This prevents one failed Time Burst from breaking the entire sequence
+                if !State.isRunning
+                    return
+                continue
+            }
+            
+            ; Small delay between repetitions (except for the last one)
+            if (A_Index < timeBurstReps && State.isRunning) {
+                Util.Sleep(State.microDelayMs * 10)
+            }
+        }
+    }
 }
 
 ; ================================================================================
@@ -1062,9 +1234,17 @@ class Macro {
             return
         Sequence.FinalMerge(Sequence.GetMergeWaitTime())
         
+        ; Execute Time Burst sequence before refining
         if !State.isRunning
             return
-        Action.Refine()
+        Sequence.ExecuteTimeBurstSequence()
+        
+        ; Only refine if Auto Refining is enabled
+        if State.autoRefining {
+            if !State.isRunning
+                return
+            Action.Refine()
+        }
     }
     
     ; Quick macro cycle - faster, less polishing
@@ -1082,9 +1262,17 @@ class Macro {
             return
         Sequence.SpawnOnly()
         
+        ; Execute Time Burst sequence before refining
         if !State.isRunning
             return
-        Action.Refine()
+        Sequence.ExecuteTimeBurstSequence()
+        
+        ; Only refine if Auto Refining is enabled
+        if State.autoRefining {
+            if !State.isRunning
+                return
+            Action.Refine()
+        }
     }
     
     ; Long macro cycle - more thorough with extra polish
@@ -1110,9 +1298,17 @@ class Macro {
             return
         Sequence.FinalMerge(Sequence.GetMergeWaitTime())
         
+        ; Execute Time Burst sequence before refining
         if !State.isRunning
             return
-        Action.Refine()
+        Sequence.ExecuteTimeBurstSequence()
+        
+        ; Only refine if Auto Refining is enabled
+        if State.autoRefining {
+            if !State.isRunning
+                return
+            Action.Refine()
+        }
     }
     
     ; Endgame exploit macro - special sequence for endgame
@@ -1710,7 +1906,7 @@ class UIManager {
         titleX := 55
         titleY := (hdrH - 26) // 2
         UI.titleText := UI.gui.AddText(Format("x{} y{} w{} h26 Center +BackgroundFFFFFF", 
-                                       titleX, titleY, titleW), "Revolution Idle Helper v1.2")
+                                       titleX, titleY, titleW), "Revolution Idle Helper v1.2.1")
         UI.titleText.SetFont("Bold s11 c000000", "Cascadia Mono")
         
         ; Eye icon (left) - BLACK on white background
@@ -1856,7 +2052,7 @@ class UIManager {
                     y += btnH + UI.rowGap
                     
                     ; Custom spawn input (centered with indentation)
-                    lblW := 170  ; Custom input label width
+                    lblW := 200  ; Custom input label width (increased for "Time burst reps:")
                     edtW := 50   ; Width for 2-3 characters
                     customGap := 20  ; Custom gap between label and textbox
                     totalW := lblW + edtW + Constants.UI_INPUT_GAP
@@ -1880,6 +2076,18 @@ class UIManager {
                     edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + customGap, y, edtW), State.customPolishReps)
                     edt.SetFont("s10 c000000", "Cascadia Mono")
                     UI.inputCustomPolish := edt
+                    UI.sectionContents["refining.parameters.gamestate"].Push(edt)
+                    
+                    y += Constants.UI_INPUT_HEIGHT + UI.rowGap
+                    
+                    ; Time Burst Reps input (centered with indentation)
+                    x := (UI.hudW - totalW) // 2 + 12  ; Slight indent for nested elements
+                    lbl := UI.gui.AddText(Format("x{} y{} w{} h30", x, y + Constants.UI_LABEL_OFFSET, lblW), "Time burst reps:")
+                    UI.sectionContents["refining.parameters.gamestate"].Push(lbl)
+                    
+                    edt := UI.gui.AddEdit(Format("x{} y{} w{} h30 Center +Border", x + lblW + customGap, y, edtW), State.timeBurstReps)
+                    edt.SetFont("s10 c000000", "Cascadia Mono")
+                    UI.inputTimeBurstReps := edt
                     UI.sectionContents["refining.parameters.gamestate"].Push(edt)
                     
                     y += Constants.UI_INPUT_HEIGHT + UI.sectionGap
@@ -2765,6 +2973,10 @@ class UIManager {
             try UI.inputCustomPolish.OnEvent("Change", (*) => Controller.UpdateCustomPolish())
             try UI.inputCustomPolish.OnEvent("LoseFocus", (*) => Controller.ValidateCustomPolish())
         }
+        if UI.inputTimeBurstReps && IsObject(UI.inputTimeBurstReps) {
+            try UI.inputTimeBurstReps.OnEvent("Change", (*) => Controller.UpdateTimeBurstReps())
+            try UI.inputTimeBurstReps.OnEvent("LoseFocus", (*) => Controller.ValidateTimeBurstReps())
+        }
     }
     
     ; Toggle a collapsible section
@@ -3630,6 +3842,15 @@ class Controller {
         }
     }
     
+    static UpdateTimeBurstReps() {
+        if UI.inputTimeBurstReps && IsObject(UI.inputTimeBurstReps) {
+            newVal := UI.inputTimeBurstReps.Text
+            if newVal != State.timeBurstReps && newVal != "" {
+                State.timeBurstReps := newVal
+            }
+        }
+    }
+    
     ; Validation functions to restore defaults if empty
     static ValidateMineralLevel() {
         if UI.inputMineralLevel && IsObject(UI.inputMineralLevel) {
@@ -3699,6 +3920,30 @@ class Controller {
             if UI.inputCustomPolish.Text = "" || !RegExMatch(UI.inputCustomPolish.Text, "^\d+$") {
                 UI.inputCustomPolish.Text := "1"
                 State.customPolishReps := "1"
+            }
+        }
+    }
+    
+    static ValidateTimeBurstReps() {
+        if UI.inputTimeBurstReps && IsObject(UI.inputTimeBurstReps) {
+            inputValue := UI.inputTimeBurstReps.Text
+            
+            ; Check if empty or not a valid number
+            if inputValue = "" || !RegExMatch(inputValue, "^\d+$") {
+                UI.inputTimeBurstReps.Text := "0"
+                State.timeBurstReps := "0"
+                return
+            }
+            
+            ; Convert to number and validate bounds (0-20 reasonable limit)
+            numValue := inputValue + 0
+            if numValue < 0 {
+                UI.inputTimeBurstReps.Text := "0"
+                State.timeBurstReps := "0"
+            } else if numValue > 20 {
+                ; Cap at 20 to prevent excessive Time Burst repetitions
+                UI.inputTimeBurstReps.Text := "20"
+                State.timeBurstReps := "20"
             }
         }
     }
