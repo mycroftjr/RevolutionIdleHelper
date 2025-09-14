@@ -1,6 +1,11 @@
-# 🤖 Revolution Idle Helper v1.2 - Complete Automation Suite
+# 🤖 Revolution Idle Helper v1.2.1 - Complete Automation Suite
 
 Since my last post, I've added major features and QoL improvements to the script. This is a comprehensive technical guide covering all functionality.
+
+## 🆕 What's New in v1.2.1
+
+- **⚡ Time Burst Integration**: Automated Time Burst sequence executes before refining with configurable repetitions
+- **🎯 Seamless Integration**: Works automatically with Quick, Standard, and Long macros
 
 ## 🆕 What's New in v1.2
 
@@ -39,7 +44,7 @@ Since my last post, I've added major features and QoL improvements to the script
 ### 📍 Coordinate System
 The script uses **screen coordinates only** - no game memory modification or value reading. It controls mouse/keyboard input exclusively.
 
-**Setup Process (v1.2):**
+**Setup Process (v1.2.1):**
 - Navigate to Other Tools > Coordinate Settings
 - List displays all required coordinates with descriptions
 - Double-click any coordinate to enter picker mode
@@ -90,6 +95,21 @@ Spawn/polish cycles are customizable based on progression. Rule of thumb: earlie
 **Spawn Cycle**: Number of highest mineral spawns before polishing. Early game requires multiple spawns to reach maximum affordable level.
 
 **Polish Cycle**: Number of weapon polish rounds before final high-value loop and refining.
+
+**Time Burst Reps** (0-20): Number of Time Burst sequences to execute before refining.
+- **0**: Disabled (default) - no Time Burst actions, macros work as before
+- **1-20**: Executes the full Time Burst sequence the specified number of times
+
+**Time Burst Sequence**:
+1. Set mineral level to highest (999)
+2. Navigate to Unity tab → activate autospawn (if unlocked)
+3. Navigate to Automation tab → activate automerge (if unlocked)  
+4. Navigate to Time Flux tab → perform time warp burst
+5. Navigate back to Unity tab → deactivate autospawn
+6. Navigate back to Automation tab → deactivate automerge
+7. Return to Unity tab
+
+⚠️ **Requirements**: Time Warp parameters must be configured in Unity Parameters section for Time Burst to work.
 
 ### ⚙️ Fine Settings Configuration
 
