@@ -8,9 +8,12 @@
 ; ================================================================================
 
 #Requires AutoHotkey v2.0
+#Warn
+#Warn LocalSameAsGlobal, Off
+; from https://github.com/Descolada/OCR/blob/main/Lib/OCR.ahk
+#Include "*i OCR.ahk"
 #SingleInstance Force
 #MaxThreadsPerHotkey 2
-#Warn
 
 ; ================================================================================
 ; INITIALIZATION
@@ -152,6 +155,9 @@ class State {
     static currentMacro := "standard"  ; Active macro type (default: standard)
     static gameState := "early"      ; Game progression state (default: early)
     static cycleTimes := []          ; Array of recent cycle completion times
+    static RfPGains := []
+    static avgTime := "NaN"
+    static RfP := "unknown"
     static lastCycleEnd := 0        ; Timestamp of last cycle completion
     
     ; User-configurable settings with defaults
@@ -410,6 +416,7 @@ class UI {
     static imgPreview := 0
     static lblStatistics := 0
     static lblCycleTime := 0
+    static lblRfPGain := 0
     
     ; Info section control
     static lblInfo := 0
@@ -852,7 +859,7 @@ class Action {
         Action.Click("automationTab")
         Util.Sleep(State.microDelayMs)
         Action.Click("automerge")
-        Util.Sleep(State.microDelayMs)
+        Util.Sleep(State.microDelayMs * 1.5)
         Action.Click("automerge")
         Util.Sleep(State.microDelayMs)
         Action.Click("unityTab")
@@ -1225,7 +1232,7 @@ class Macro {
     static Standard() {
         if State.isRunning {
             Util.Sleep(State.microDelayMs)
-            Screenshot.Capture()
+            Screenshot.Capture(true)
         }
         
         if !State.isRunning
@@ -1253,7 +1260,7 @@ class Macro {
     static Quick() {
         if State.isRunning {
             Util.Sleep(State.microDelayMs)
-            Screenshot.Capture()
+            Screenshot.Capture(true)
         }
         
         if !State.isRunning
@@ -1281,7 +1288,7 @@ class Macro {
     static Long() {
         if State.isRunning {
             Util.Sleep(State.microDelayMs)
-            Screenshot.Capture()
+            Screenshot.Capture(true)
         }
         
         if !State.isRunning
@@ -1317,7 +1324,7 @@ class Macro {
     static Endgame() {
         if State.isRunning {
             Util.Sleep(State.microDelayMs)
-            Screenshot.Capture()
+            Screenshot.Capture(true)
         }
         
         if !State.autoRefining {
@@ -1396,7 +1403,7 @@ class Macro {
                         Action.SetMineralLevel("999")
                         Action.SpawnMineral()
                         Action.SetMineralLevel(State.mineralLevel)
-                        Action.Click([833, 1217])
+                        Action.Click("emptySpace")
                         Util.Sleep(Sequence.GetExploitWaitTime())
                     }
                 }
@@ -1426,7 +1433,7 @@ class Macro {
                     Action.SetMineralLevel("999")
                     Action.SpawnMineral()
                     Action.SetMineralLevel(State.mineralLevel)
-                    Action.Click([833, 1217])
+                    Action.Click("emptySpace")
                     Util.Sleep(Sequence.GetExploitWaitTime())
                 }
             }
@@ -1497,9 +1504,8 @@ class Macro {
     ; Macro to continuously update the mineral spawn level while autospawning
     static MineralLevel() {
         while State.isRunning {
-            Action.Click("autospawn")
             Action.LevelUpMineral()
-            Action.Click("autospawn")
+            Action.Click("emptySpace")
             Util.Sleep(State.microDelayMs)
         }
     }
@@ -1654,7 +1660,7 @@ class Screenshot {
     }
     
     ; Capture screenshot of game statistics
-    static Capture() {
+    static Capture(calcRfP) {
         Screenshot.InitGDI()
         
         ; Find game window
@@ -1689,6 +1695,59 @@ class Screenshot {
                     UI.imgPreview.Value := filename
                 }
             }
+            if calcRfP && IsSet(OCR) {
+                OCR.DisplayImage := true
+                result := OCR.FromFile(filename, {lang:"en-us", invertcolors:1, monochrome:180, scale:2})
+                EndingToCheck := " RfP"
+                for line in result.Lines {
+                    UI.lblRfPGain.Text := "Recognized text: " . result.Text
+                    if SubStr(line.Text, -StrLen(EndingToCheck)) = EndingToCheck {
+                      recognized := StrReplace(StrReplace(SubStr(line.Text, 1, -StrLen(EndingToCheck)), "q", "9"), "o", "0")
+                      rebuilt := ""
+                      ; TODO: split by "e" and run all this on those results?
+                      split := StrSplit(recognized, ".")
+                      Loop split.Length
+                      {
+                          i := A_Index
+                          ele := split[-i]
+                          if StrLen(ele) == 3 && IsDigit(ele) {
+                              if i != split.Length
+                                  ele := "," . ele
+                          } else if split.Length > 1 && i == 1 {
+                              ele := "." . ele
+                          }
+                          rebuilt := ele . rebuilt
+                      }
+                      
+                      ; if rebuilt != recognized
+                      ;     MsgBox(Format("fixed {} to {}!", recognized, rebuilt))
+                      UI.lblRfPGain.Text := "Repaired text: " . rebuilt
+                      try {
+                          val := Number(StrReplace(rebuilt, ","))
+                          if State.RfP != "unknown" && State.avgTime != "NaN" {
+                              change := val - State.RfP
+                              if change < 0 {
+                                MsgBox(Format("RfP change: {} = {} - {}", change, val, State.RfP))
+                              } else {
+                                  State.RfPGains.Push(change)
+                                  if State.RfPGains.Length > 20
+                                      State.RfPGains.RemoveAt(1)
+                                  totalGain := 0
+                                  for time in State.RfPGains
+                                      totalGain += time
+                                  avgRfP := totalGain / State.RfPGains.Length
+                                  UI.lblRfPGain.Text := Format("Avg RfP gain/s: {} = {} / {}", avgRfP / (State.avgTime / 1000), avgRfP, State.avgTime / 1000)
+                                  ; UI.lblRfPGain.Text := Format("Last RfP gain/s: {} = {} / {}", change / (State.cycleTimes[-1] / 1000), change, State.cycleTimes[-1] / 1000)
+                              }
+                          }
+                          State.RfP := val
+                      } catch TypeError {
+                          MsgBox(Format("fixed {} to {}!", recognized, rebuilt))
+                      }
+                      break
+                    }
+                }
+            }
         }
         
         ; Clean up old screenshots
@@ -1708,7 +1767,7 @@ class Screenshot {
         ; Convert to GDI+ bitmap and apply threshold
         pBitmap := 0
         DllCall("gdiplus\GdipCreateBitmapFromHBITMAP", "ptr", hbm, "ptr", 0, "ptr*", &pBitmap)
-        Screenshot.ApplyThreshold(pBitmap, State.bwThreshold)
+        ; Screenshot.ApplyThreshold(pBitmap, State.bwThreshold)
         
         ; Save as PNG
         clsid := Screenshot.GetPngCLSID()
@@ -2033,6 +2092,17 @@ class UIManager {
                 lbl.SetFont("s10", "Cascadia Mono")
                 UI.lblCycleTime := lbl
                 UI.sectionContents["refining.statistics"].Push(lbl)
+                
+                if IsSet(OCR) {
+                    y += 35 + 5  ; Minimal spacing between related statistics labels
+                    
+                    ; Average RfP gain
+                    lbl := UI.gui.AddText(Format("x{} y{} w{} h35", pad + 12, y, previewW), 
+                                                 "Avg RfP/s: ")
+                    lbl.SetFont("s10", "Cascadia Mono")
+                    UI.lblRfPGain := lbl
+                    UI.sectionContents["refining.statistics"].Push(lbl)
+                }
                 
                 y += 35 + UI.sectionGap  ; Account for full label height plus section spacing
             }
@@ -3107,8 +3177,8 @@ class UIManager {
                     totalTime := 0
                     for time in State.cycleTimes
                         totalTime += time
-                    avgTime := totalTime / State.cycleTimes.Length
-                    UI.lblCycleTime.Text := Format("Avg cycle: {}", Util.FormatTime(Round(avgTime)))
+                    State.avgTime := totalTime / State.cycleTimes.Length
+                    UI.lblCycleTime.Text := Format("Avg cycle: {}", Util.FormatTime(Round(State.avgTime)))
                 } else {
                     UI.lblCycleTime.Text := "Avg cycle: --:--:--:-"
                 }
@@ -3564,6 +3634,8 @@ class Controller {
         
         ; Reset statistics
         State.cycleTimes := []
+        State.RfPGains := []
+        State.avgTime := "NaN"
         State.lastCycleEnd := A_TickCount
         
         ; Focus game and start macro
